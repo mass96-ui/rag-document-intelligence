@@ -1,4 +1,4 @@
-﻿langchain
+langchain
 langchain-core
 langchain-community
 langchain-text-splitters
@@ -9,3 +9,4 @@ pymupdf
 sentence-transformers
 jupyter
 ipykernel
+pytest
