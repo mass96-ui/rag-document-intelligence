@@ -19,6 +19,10 @@ COLLECTION_NAME = "pdf_documents"
 # Sentence Transformer embedding model.
 EMBEDDING_MODEL_NAME = "all-MiniLM-L6-v2"
 
+# LLM Provider selection (e.g., "mock", "ollama", "openai", "gemini").
+# Currently only "mock" is implemented.
+LLM_PROVIDER = "mock"
+
 # Text splitting configuration.
 CHUNK_SIZE = 500
 CHUNK_OVERLAP = 50

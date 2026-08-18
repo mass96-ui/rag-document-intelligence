@@ -40,3 +40,25 @@ class MockLLMProvider(LLMProvider):
             f"Based on the provided context (Preview: {context_preview}), "
             f"this is a simulated answer."
         )
+
+
+def get_llm_provider(provider_name: str = "mock") -> LLMProvider:
+    """
+    Factory function to get an LLM provider by name.
+
+    Args:
+        provider_name: The name of the provider to use.
+
+    Returns:
+        An instance of an LLMProvider.
+    """
+    providers = {
+        "mock": MockLLMProvider,
+    }
+
+    if provider_name not in providers:
+        # Fallback to mock for beginners/testing
+        print(f"Warning: Provider '{provider_name}' not implemented. Using 'mock' instead.")
+        return MockLLMProvider()
+
+    return providers[provider_name]()
