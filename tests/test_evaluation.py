@@ -121,3 +121,83 @@ def test_evaluate_answer_rejects_empty_context():
     result = RAGEvaluator.evaluate_answer("An answer", "")
     assert result["grounded"] is False
     assert "context" in result["reason"].lower()
+
+
+# ---------------------------------------------------------------------------
+# Citation enforcement validation tests
+# ---------------------------------------------------------------------------
+
+_DOCS = [
+    {"rank": 1, "content": "alpha", "metadata": {"source": "a.pdf"}},
+    {"rank": 2, "content": "beta", "metadata": {"source": "b.pdf"}},
+    {"rank": 3, "content": "gamma", "metadata": {"source": "c.pdf"}},
+]
+
+
+def test_citation_enforcement_valid_citations():
+    result = RAGEvaluator.evaluate_citation_enforcement(
+        "The answer is based on [1] and [2].", _DOCS
+    )
+    assert result["valid"] is True
+    assert result["cited_numbers"] == [1, 2]
+    assert result["reason"] == "valid citations"
+
+
+def test_citation_enforcement_fabricated_citation():
+    result = RAGEvaluator.evaluate_citation_enforcement(
+        "Based on [99], the answer is X.", _DOCS
+    )
+    assert result["valid"] is False
+    assert result["reason"] == "fabricated citations"
+    assert 99 in result["fabricated_citations"]
+
+
+def test_citation_enforcement_missing_citations():
+    result = RAGEvaluator.evaluate_citation_enforcement(
+        "The answer is X without any citations.", _DOCS
+    )
+    assert result["valid"] is False
+    assert result["reason"] == "missing citations"
+
+
+def test_citation_enforcement_empty_answer():
+    result = RAGEvaluator.evaluate_citation_enforcement("", _DOCS)
+    assert result["valid"] is False
+    assert result["reason"] == "empty answer"
+
+
+def test_citation_enforcement_refusal_is_accepted():
+    result = RAGEvaluator.evaluate_citation_enforcement(
+        "I could not find this information in the provided documents.",
+        _DOCS,
+    )
+    assert result["valid"] is True
+    assert "refusal" in result["reason"]
+
+
+def test_citation_enforcement_whitespace_answer():
+    result = RAGEvaluator.evaluate_citation_enforcement("   ", _DOCS)
+    assert result["valid"] is False
+    assert result["reason"] == "empty answer"
+
+
+def test_is_refusal_detects_standard_phrase():
+    assert RAGEvaluator.is_refusal(
+        "I could not find this information in the provided documents."
+    )
+
+
+def test_is_refusal_detects_variants():
+    assert RAGEvaluator.is_refusal(
+        "I don't have enough information in the retrieved "
+        "documents to answer that confidently."
+    )
+    assert RAGEvaluator.is_refusal("I cannot find this information")
+
+
+def test_is_refusal_rejects_normal_answer():
+    assert not RAGEvaluator.is_refusal("The answer is [1] based.")
+
+
+def test_is_refusal_rejects_empty():
+    assert not RAGEvaluator.is_refusal("")

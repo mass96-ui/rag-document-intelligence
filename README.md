@@ -421,6 +421,28 @@ The system prompt is emitted **before** the retrieved context, with
 explicit instructions that the context is evidence, not instructions.
 This prevents untrusted document text from overriding the grounding rules.
 
+### Citation enforcement
+
+After the LLM generates an answer, the pipeline validates citations using
+`RAGEvaluator.evaluate_citation_enforcement()`:
+
+1. **Empty answer** — detected and rejected.
+2. **Refusal phrases** — accepted without citations (e.g., "I could not find
+   this information in the provided documents.").
+3. **Fabricated citations** (e.g., `[99]` when only `[1]`–`[3]` exist) —
+   detected and rejected.
+4. **Missing citations** on a non-refusal answer — detected and rejected.
+
+When the initial answer fails validation, the pipeline makes **at most one**
+regeneration attempt. The regeneration prompt explicitly lists the available
+citation numbers and instructs the model to cite only those numbers.
+
+If the regenerated answer is still invalid, the pipeline returns a safe
+refusal: "I could not find this information in the provided documents."
+
+This ensures the pipeline **never silently returns** an answer with
+fabricated, invalid, or missing citations.
+
 ### No credentials
 
 No API keys or secrets are stored. All LLM inference runs locally via

@@ -202,3 +202,167 @@ def test_pipeline_returns_error_on_generation_failure():
     result = pipeline.answer("test question")
     assert "generation" in result["answer"].lower()
     assert len(result["source_documents"]) == 1
+
+
+# ---------------------------------------------------------------------------
+# Citation enforcement pipeline tests
+# ---------------------------------------------------------------------------
+
+class _ConfigurableMockLLM:
+    """Mock LLM that returns pre-set responses in order."""
+
+    def __init__(self, responses=None):
+        self.responses = list(responses or [])
+        self.call_count = 0
+        self.calls = []
+
+    def generate(self, query, context):
+        self.call_count += 1
+        self.calls.append({"query": query, "context": context})
+        if self.call_count <= len(self.responses):
+            return self.responses[self.call_count - 1]
+        return self.responses[-1] if self.responses else ""
+
+
+def _mock_docs(count=3):
+    docs = []
+    for i in range(1, count + 1):
+        docs.append(
+            {
+                "rank": i,
+                "content": f"Content {i}",
+                "metadata": {"source": f"doc{i}.pdf", "page": i},
+                "distance": 0.5,
+                "score": 0.67,
+            }
+        )
+    return docs
+
+
+def test_citation_enforcement_valid_citations_pass():
+    docs = _mock_docs(3)
+    llm = _ConfigurableMockLLM(["The answer is [1] and [2]."])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "The answer is [1] and [2]." in result["answer"]
+    assert llm.call_count == 1
+
+
+def test_citation_enforcement_fabricated_triggers_regeneration():
+    docs = _mock_docs(3)
+    llm = _ConfigurableMockLLM([
+        "Based on [99] the answer is X.",
+        "Based on [1] the answer is X.",
+    ])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "[1]" in result["answer"]
+    assert "[99]" not in result["answer"]
+    assert llm.call_count == 2
+
+
+def test_citation_enforcement_missing_triggers_regeneration():
+    docs = _mock_docs(3)
+    llm = _ConfigurableMockLLM([
+        "The answer is X without citations.",
+        "The answer is [1] based on retrieved context.",
+    ])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "[1]" in result["answer"]
+    assert llm.call_count == 2
+
+
+def test_citation_enforcement_empty_then_regenerate():
+    docs = _mock_docs(3)
+    llm = _ConfigurableMockLLM([
+        "",
+        "The answer is [1] and [2].",
+    ])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "[1]" in result["answer"]
+    assert llm.call_count == 2
+
+
+def test_citation_enforcement_failed_regeneration_refuses():
+    docs = _mock_docs(3)
+    llm = _ConfigurableMockLLM([
+        "Based on [99] the answer.",
+        "Based on [98] the answer.",
+    ])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "could not find this information" in result["answer"].lower()
+    assert llm.call_count == 2
+
+
+def test_citation_enforcement_regeneration_at_most_once():
+    docs = _mock_docs(3)
+    llm = _ConfigurableMockLLM([
+        "Based on [99] the answer.",
+        "Based on [98] the answer.",
+        "Based on [97] the answer.",
+    ])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "could not find this information" in result["answer"].lower()
+    assert llm.call_count == 2
+
+
+def test_citation_enforcement_unsupported_question_refuses():
+    llm = _ConfigurableMockLLM(["anything"])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever([]),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("What is the capital of France?")
+    assert "enough information" in result["answer"].lower()
+    assert llm.call_count == 0
+
+
+def test_citation_enforcement_mock_provider_compatible():
+    """Existing MockLLMProvider behavior must remain compatible."""
+    docs = _mock_docs(1)
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=MockLLMProvider(),
+    )
+    result = pipeline.answer("test question")
+    assert "[MOCK RESPONSE]" in result["answer"]
+
+
+class _MockRetriever:
+    """Simple retriever mock returning preset documents."""
+
+    def __init__(self, documents):
+        self._documents = documents
+
+    def retrieve(self, query, top_k=5, score_threshold=None):
+        return self._documents
