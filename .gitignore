@@ -38,3 +38,5 @@ data/vector_store*/
 *.egg-info/
 
 .env
+
+.env
