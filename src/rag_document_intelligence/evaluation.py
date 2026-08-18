@@ -1,4 +1,10 @@
+import logging
+import re
 from typing import Any, Dict, List
+
+logger = logging.getLogger(__name__)
+
+_CITATION_RE = re.compile(r"\[(\d+)\]")
 
 
 class RAGEvaluator:
@@ -13,13 +19,16 @@ class RAGEvaluator:
         Evaluate whether expected source documents were retrieved.
         """
 
-        retrieved_sources = []
+        retrieved_sources: List[str] = []
 
         for document in retrieved_documents:
             metadata = document.get("metadata", {})
             source = metadata.get("source")
+            source_name = metadata.get("source_name")
 
-            if source:
+            if source_name:
+                retrieved_sources.append(str(source_name))
+            elif source:
                 retrieved_sources.append(str(source))
 
         expected = set(expected_sources)
@@ -67,4 +76,37 @@ class RAGEvaluator:
         return {
             "grounded": True,
             "reason": "Answer was generated using retrieved context.",
+        }
+
+    @staticmethod
+    def evaluate_citations(
+        answer: str,
+        source_documents: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Check that citation numbers in the answer correspond to
+        retrieved evidence and detect fabricated citations.
+        """
+
+        cited_numbers = sorted(
+            set(int(n) for n in _CITATION_RE.findall(answer))
+        )
+
+        available_ranks: set[int] = set()
+        for idx, doc in enumerate(source_documents, start=1):
+            rank = doc.get("rank", idx)
+            if rank is not None:
+                available_ranks.add(rank)
+
+        fabricated = [
+            num for num in cited_numbers
+            if num not in available_ranks
+        ]
+
+        return {
+            "cited_numbers": cited_numbers,
+            "available_ranks": sorted(available_ranks),
+            "fabricated_citations": fabricated,
+            "has_fabricated_citations": len(fabricated) > 0,
+            "valid": len(fabricated) == 0,
         }

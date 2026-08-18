@@ -73,3 +73,132 @@ def test_rag_pipeline_orchestrates_flow():
 
     # Verify retriever was called
     mock_retriever.retrieve.assert_called_once_with(query=query, top_k=5)
+
+
+def test_context_builder_includes_score_and_doc_id():
+    builder = ContextBuilder()
+    docs = [
+        {
+            "rank": 1,
+            "id": "doc1.pdf|0|abc123",
+            "score": 0.95,
+            "content": "Important finding",
+            "metadata": {"source": "doc1.pdf", "page": 3},
+        },
+    ]
+    context = builder.build_context(docs)
+    assert "[1] Source: doc1.pdf, Page: 3" in context
+    assert "Score" in context
+    assert "doc1.pdf|0|abc123" in context
+    assert "Important finding" in context
+
+
+def test_context_builder_citation_numbering_is_stable():
+    builder = ContextBuilder()
+    docs = [
+        {"rank": 1, "content": "Alpha", "metadata": {"source": "a.pdf"}},
+        {"rank": 2, "content": "Beta", "metadata": {"source": "b.pdf"}},
+        {"rank": 3, "content": "Gamma", "metadata": {"source": "c.pdf"}},
+    ]
+    context1 = builder.build_context(docs)
+    context2 = builder.build_context(docs)
+    assert context1 == context2
+    assert "[1]" in context1
+    assert "[2]" in context1
+    assert "[3]" in context1
+
+
+def test_context_builder_handles_missing_metadata():
+    builder = ContextBuilder()
+    docs = [
+        {"rank": 1, "content": "Some content", "metadata": {}},
+    ]
+    context = builder.build_context(docs)
+    assert "[1] Source: unknown, Page: unknown" in context
+    assert "Some content" in context
+
+
+def test_context_builder_handles_missing_metadata_key():
+    builder = ContextBuilder()
+    docs = [{"rank": 1, "content": "Some content"}]
+    context = builder.build_context(docs)
+    assert "[1] Source: unknown, Page: unknown" in context
+
+
+def test_context_builder_skips_empty_content():
+    builder = ContextBuilder()
+    docs = [
+        {"rank": 1, "content": "", "metadata": {"source": "a.pdf"}},
+        {"rank": 2, "content": "Real content", "metadata": {"source": "b.pdf"}},
+    ]
+    context = builder.build_context(docs)
+    assert "[1]" not in context
+    assert "[2] Source: b.pdf" in context
+
+
+def test_context_builder_source_name_preferred_over_source():
+    builder = ContextBuilder()
+    docs = [
+        {
+            "rank": 1,
+            "content": "content",
+            "metadata": {"source": "/full/path/doc.pdf", "source_name": "doc.pdf"},
+        },
+    ]
+    context = builder.build_context(docs)
+    assert "Source: doc.pdf" in context
+    assert "/full/path" not in context
+
+
+def test_pipeline_rejects_empty_query():
+    pipeline = RAGPipeline(
+        retriever=MagicMock(),
+        context_builder=ContextBuilder(),
+        llm_provider=MockLLMProvider(),
+    )
+    result = pipeline.answer("")
+    assert "empty" in result["answer"].lower()
+    assert result["source_documents"] == []
+
+
+def test_pipeline_returns_refusal_when_no_documents():
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve.return_value = []
+    pipeline = RAGPipeline(
+        retriever=mock_retriever,
+        context_builder=ContextBuilder(),
+        llm_provider=MockLLMProvider(),
+    )
+    result = pipeline.answer("unknown question")
+    assert "enough information" in result["answer"].lower()
+    assert result["source_documents"] == []
+
+
+def test_pipeline_returns_error_on_retrieval_failure():
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve.side_effect = RuntimeError("Vector store down")
+    pipeline = RAGPipeline(
+        retriever=mock_retriever,
+        context_builder=ContextBuilder(),
+        llm_provider=MockLLMProvider(),
+    )
+    result = pipeline.answer("test question")
+    assert "retrieval" in result["answer"].lower()
+    assert result["source_documents"] == []
+
+
+def test_pipeline_returns_error_on_generation_failure():
+    mock_retriever = MagicMock()
+    mock_retriever.retrieve.return_value = [
+        {"rank": 1, "content": "data", "metadata": {"source": "d.pdf"}}
+    ]
+    mock_llm = MagicMock()
+    mock_llm.generate.side_effect = RuntimeError("Ollama exploded")
+    pipeline = RAGPipeline(
+        retriever=mock_retriever,
+        context_builder=ContextBuilder(),
+        llm_provider=mock_llm,
+    )
+    result = pipeline.answer("test question")
+    assert "generation" in result["answer"].lower()
+    assert len(result["source_documents"]) == 1

@@ -1,8 +1,12 @@
-﻿from typing import Any, Dict
+﻿import logging
+from typing import Any, Dict, Optional
 
+from .config import MAX_QUERY_LENGTH
 from .context_builder import ContextBuilder
 from .llm import LLMProvider
 from .retriever import RAGRetriever
+
+logger = logging.getLogger(__name__)
 
 
 class RAGPipeline:
@@ -22,6 +26,7 @@ class RAGPipeline:
         self,
         query: str,
         top_k: int = 5,
+        score_threshold: Optional[float] = None,
     ) -> Dict[str, Any]:
         """
         Execute the complete RAG pipeline.
@@ -45,6 +50,17 @@ class RAGPipeline:
                 "context_length": 0,
             }
 
+        if len(cleaned_query) > MAX_QUERY_LENGTH:
+            return {
+                "query": query,
+                "answer": (
+                    f"Error: Question exceeds maximum length of "
+                    f"{MAX_QUERY_LENGTH} characters."
+                ),
+                "source_documents": [],
+                "context_length": 0,
+            }
+
         if top_k <= 0:
             return {
                 "query": cleaned_query,
@@ -58,11 +74,19 @@ class RAGPipeline:
 
         # 2. Retrieve relevant document chunks
         try:
-            retrieved_docs = self.retriever.retrieve(
-                query=cleaned_query,
-                top_k=top_k,
-            )
+            if score_threshold is not None:
+                retrieved_docs = self.retriever.retrieve(
+                    query=cleaned_query,
+                    top_k=top_k,
+                    score_threshold=score_threshold,
+                )
+            else:
+                retrieved_docs = self.retriever.retrieve(
+                    query=cleaned_query,
+                    top_k=top_k,
+                )
         except Exception as exc:
+            logger.error("Retrieval failed: %s", exc)
             return {
                 "query": cleaned_query,
                 "answer": f"Error during retrieval: {exc}",
@@ -75,8 +99,8 @@ class RAGPipeline:
             return {
                 "query": cleaned_query,
                 "answer": (
-                    "I could not find relevant information in the "
-                    "provided documents to answer your question."
+                    "I don't have enough information in the retrieved "
+                    "documents to answer that confidently."
                 ),
                 "source_documents": [],
                 "context_length": 0,
@@ -105,12 +129,18 @@ class RAGPipeline:
                 context=context,
             )
         except Exception as exc:
+            logger.error("Generation failed: %s", exc)
             return {
                 "query": cleaned_query,
                 "answer": f"Error during answer generation: {exc}",
                 "source_documents": retrieved_docs,
                 "context_length": len(context),
             }
+
+        logger.info(
+            "RAG answer generated for query (context=%d chars)",
+            len(context),
+        )
 
         # 6. Return answer + evidence
         return {

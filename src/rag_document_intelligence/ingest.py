@@ -1,4 +1,5 @@
-﻿from pathlib import Path
+﻿import logging
+from pathlib import Path
 from typing import List, Optional
 
 from langchain_core.documents import Document
@@ -15,6 +16,8 @@ from .config import (
 from .embeddings import EmbeddingManager
 from .loaders import DocumentLoader
 from .vector_store import VectorStore
+
+logger = logging.getLogger(__name__)
 
 
 def ingest_documents(
@@ -42,33 +45,38 @@ def ingest_documents(
     )
 
     vector_store = VectorStore(
-        persist_directory=str(VECTOR_STORE_DIR),
+        persist_directory=VECTOR_STORE_DIR,
         collection_name=COLLECTION_NAME,
     )
 
-    print(f"Input documents: {len(documents)}")
+    logger.info("Input documents: %d", len(documents))
 
     chunks = chunker.split_documents(documents)
 
     if not chunks:
-        raise ValueError("No chunks were created from the provided documents.")
+        raise ValueError(
+            "No chunks were created from the provided documents."
+        )
 
-    print(f"Created {len(chunks)} chunks.")
+    logger.info("Created %d chunks", len(chunks))
 
     texts = [chunk.page_content for chunk in chunks]
 
-    print("Generating embeddings...")
+    logger.info("Generating embeddings...")
     embeddings = embedding_manager.generate_embeddings(texts)
 
-    print(f"Generated {len(embeddings)} embeddings.")
+    logger.info("Generated %d embeddings", len(embeddings))
 
     added_count = vector_store.add_documents(
         chunks,
         embeddings,
     )
 
-    print(f"Added {added_count} new chunks.")
-    print(f"Total documents in collection: {vector_store.collection.count()}")
+    logger.info(
+        "Ingestion complete. Added %d new chunks. "
+        "Total in collection: %d",
+        added_count, vector_store.count(),
+    )
 
     return added_count
 
@@ -113,37 +121,43 @@ def ingest_text(
 
 def run_ingestion(
     docs_dir: Optional[str] = None,
-):
+) -> int:
     """
     Ingest every supported document from a directory.
+
+    Returns the number of newly added chunks.
     """
     target_dir = Path(docs_dir or DOCUMENTS_DIR)
 
-    print("--- Starting Document Ingestion ---")
-    print(f"Scanning directory: {target_dir}")
+    logger.info("--- Starting Document Ingestion ---")
+    logger.info("Scanning directory: %s", target_dir)
 
     if not target_dir.exists():
-        print(f"Error: Directory '{target_dir}' does not exist.")
-        return
+        logger.warning(
+            "Directory '%s' does not exist.", target_dir
+        )
+        return 0
 
     loader = DocumentLoader(
         documents_dir=target_dir
     )
 
-    print("Loading documents...")
+    logger.info("Loading documents...")
     documents = loader.load_all_documents()
 
     if not documents:
-        print("No supported documents found to ingest.")
-        return
+        logger.info("No supported documents found to ingest.")
+        return 0
 
-    print(f"Loaded {len(documents)} document(s).")
+    logger.info("Loaded %d document(s).", len(documents))
 
     added_count = ingest_documents(documents)
 
-    print("--- Ingestion Complete ---")
-    print(f"Added {added_count} new chunks.")
-    print(f"Vector store: {VECTOR_STORE_DIR}")
+    logger.info("--- Ingestion Complete ---")
+    logger.info("Added %d new chunks.", added_count)
+    logger.info("Vector store: %s", VECTOR_STORE_DIR)
+
+    return added_count
 
 
 if __name__ == "__main__":

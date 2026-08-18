@@ -4,6 +4,7 @@ venv/
 env/
 __pycache__/
 *.py[cod]
+*.egg-info/
 .pytest_cache/
 
 # Jupyter
@@ -12,6 +13,7 @@ __pycache__/
 # Local data and generated vector database
 data/documents/
 data/vector_store/
+data/vector_store*/
 
 # Environment and secrets
 .env
@@ -26,17 +28,3 @@ Thumbs.db
 
 # Logs
 *.log
-
-# Local documents and generated vector database
-data/documents/
-data/vector_store/
-
-# ChromaDB and local vector-store backups
-data/vector_store*/
-
-# Python packaging
-*.egg-info/
-
-.env
-
-.env

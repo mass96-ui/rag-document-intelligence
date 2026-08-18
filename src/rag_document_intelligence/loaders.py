@@ -1,5 +1,6 @@
-﻿from pathlib import Path
-from typing import List, Optional
+﻿import logging
+from pathlib import Path
+from typing import List
 
 from langchain_core.documents import Document
 from langchain_community.document_loaders import (
@@ -14,6 +15,8 @@ except ImportError:
     DocxDocument = None
 
 from .config import DOCUMENTS_DIR
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentLoader:
@@ -53,6 +56,48 @@ class DocumentLoader:
                 f"Supported types: {supported}"
             )
 
+        if file_path.stat().st_size == 0:
+            raise ValueError(
+                f"File is empty (0 bytes): {file_path.name}"
+            )
+
+    def _resolve_path(self, file_path: str | Path) -> Path:
+        """Resolve a file path, preventing traversal for relative paths.
+
+        Absolute paths are used as-is.  Relative paths that contain
+        ``..`` are checked against the documents directory root.
+        """
+        path = Path(str(file_path))
+
+        if not path.is_absolute() and ".." in path.parts:
+            root = self.documents_dir.resolve()
+            resolved = (root / path).resolve()
+            try:
+                resolved.relative_to(root)
+            except ValueError:
+                raise ValueError(
+                    f"Path traversal detected; file must remain "
+                    f"within {root}: {file_path}"
+                )
+            return resolved
+
+        return path
+
+    @staticmethod
+    def _filter_empty(documents: List[Document]) -> List[Document]:
+        """Remove documents whose content is empty after stripping."""
+        filtered = [
+            doc
+            for doc in documents
+            if doc.page_content.strip()
+        ]
+        if len(filtered) < len(documents):
+            logger.debug(
+                "Filtered %d empty document(s) from loader results",
+                len(documents) - len(filtered),
+            )
+        return filtered
+
     def load_text_file(
         self,
         file_path: Path,
@@ -64,6 +109,8 @@ class DocumentLoader:
         )
 
         documents = loader.load()
+
+        documents = self._filter_empty(documents)
 
         for document in documents:
             document.metadata["input_type"] = (
@@ -80,6 +127,8 @@ class DocumentLoader:
         """Load a PDF document page by page."""
         loader = PyMuPDFLoader(str(file_path))
         documents = loader.load()
+
+        documents = self._filter_empty(documents)
 
         for document in documents:
             document.metadata["input_type"] = "pdf"
@@ -127,7 +176,7 @@ class DocumentLoader:
         file_path: str | Path,
     ) -> List[Document]:
         """Load one supported file into normalized Documents."""
-        path = Path(file_path)
+        path = self._resolve_path(file_path)
         self._validate_file(path)
 
         suffix = path.suffix.lower()
@@ -184,9 +233,14 @@ class DocumentLoader:
         documents: List[Document] = []
 
         for path in self.documents_dir.rglob("*.pdf"):
-            documents.extend(
-                self.load_pdf_file(path)
-            )
+            try:
+                documents.extend(
+                    self.load_pdf_file(path.resolve())
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load PDF %s: %s", path, exc
+                )
 
         return documents
 
@@ -195,9 +249,14 @@ class DocumentLoader:
         documents: List[Document] = []
 
         for path in self.documents_dir.rglob("*.docx"):
-            documents.extend(
-                self.load_docx_file(path)
-            )
+            try:
+                documents.extend(
+                    self.load_docx_file(path.resolve())
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load DOCX %s: %s", path, exc
+                )
 
         return documents
 
@@ -206,6 +265,13 @@ class DocumentLoader:
         pattern: str,
     ) -> List[Document]:
         """Load text-like files matching a pattern."""
+        if not self.documents_dir.exists():
+            logger.warning(
+                "Documents directory does not exist: %s",
+                self.documents_dir,
+            )
+            return []
+
         loader = DirectoryLoader(
             str(self.documents_dir),
             glob=pattern,
@@ -213,7 +279,7 @@ class DocumentLoader:
             loader_kwargs={
                 "encoding": "utf-8"
             },
-            show_progress=True,
+            show_progress=False,
         )
 
         documents = loader.load()
@@ -231,11 +297,18 @@ class DocumentLoader:
                 )
             ).name
 
-        return documents
+        return self._filter_empty(documents)
 
     def load_all_documents(self) -> List[Document]:
         """Load every supported document from the document directory."""
         documents: List[Document] = []
+
+        if not self.documents_dir.exists():
+            logger.warning(
+                "Documents directory does not exist: %s",
+                self.documents_dir,
+            )
+            return []
 
         for path in sorted(
             self.documents_dir.rglob("*")
@@ -246,9 +319,14 @@ class DocumentLoader:
             if path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
                 continue
 
-            documents.extend(
-                self.load_file(path)
-            )
+            try:
+                documents.extend(
+                    self.load_file(path.resolve())
+                )
+            except Exception as exc:
+                logger.warning(
+                    "Failed to load %s: %s", path, exc
+                )
 
         return documents
 

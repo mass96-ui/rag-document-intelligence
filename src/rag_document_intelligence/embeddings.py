@@ -1,9 +1,12 @@
-﻿from typing import List
+﻿import logging
+from typing import List
 
 import numpy as np
 from sentence_transformers import SentenceTransformer
 
 from .config import EMBEDDING_MODEL_NAME
+
+logger = logging.getLogger(__name__)
 
 
 class EmbeddingManager:
@@ -14,27 +17,26 @@ class EmbeddingManager:
         model_name: str = EMBEDDING_MODEL_NAME,
     ):
         self.model_name = model_name
-        self.model = None
+        self.model: SentenceTransformer | None = None
 
         self._load_model()
 
     def _load_model(self) -> None:
         """Load the configured Sentence Transformer model."""
         try:
-            print(f"Loading embedding model: {self.model_name}")
+            logger.info("Loading embedding model: %s", self.model_name)
 
             self.model = SentenceTransformer(self.model_name)
 
-            print(
-                "Model loaded successfully. "
-                f"Embedding dimension: "
-                f"{self.model.get_embedding_dimension()}"
+            logger.info(
+                "Embedding model loaded. Dimension: %d",
+                self.model.get_embedding_dimension(),
             )
 
         except Exception as exc:
-            print(
-                f"Error loading embedding model "
-                f"{self.model_name}: {exc}"
+            logger.error(
+                "Failed to load embedding model %s: %s",
+                self.model_name, exc,
             )
             raise
 
@@ -49,18 +51,22 @@ class EmbeddingManager:
         if not texts:
             return np.empty((0, self.model.get_embedding_dimension()))
 
-        print(f"Generating embeddings for {len(texts)} texts...")
+        valid_texts = [
+            text if isinstance(text, str) else str(text)
+            for text in texts
+        ]
+
+        logger.debug("Generating embeddings for %d texts", len(valid_texts))
 
         embeddings = self.model.encode(
-            texts,
-            show_progress_bar=True,
+            valid_texts,
+            show_progress_bar=False,
         )
 
         embeddings = np.asarray(embeddings)
 
-        print(
-            f"Generated embeddings with shape: "
-            f"{embeddings.shape}"
+        logger.debug(
+            "Generated embeddings with shape: %s", embeddings.shape
         )
 
         return embeddings

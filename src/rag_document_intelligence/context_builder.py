@@ -1,5 +1,8 @@
-﻿from pathlib import Path
-from typing import Any, Dict, List
+﻿import logging
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
 
 
 class ContextBuilder:
@@ -14,9 +17,9 @@ class ContextBuilder:
         if source_name:
             return str(source_name)
 
-        source = metadata.get("source", "unknown")
+        source = metadata.get("source")
 
-        if source == "unknown":
+        if not source or source == "unknown":
             return "unknown"
 
         return Path(str(source)).name
@@ -35,6 +38,23 @@ class ContextBuilder:
 
         return str(page)
 
+    @staticmethod
+    def _format_score(score: Optional[float]) -> str:
+        """Format a normalized score for display."""
+        if score is None:
+            return ""
+        try:
+            return f" (Score: {float(score):.3f})"
+        except (TypeError, ValueError):
+            return ""
+
+    @staticmethod
+    def _format_doc_id(doc_id: Optional[str]) -> str:
+        """Format a document ID for display."""
+        if not doc_id:
+            return ""
+        return f" (ID: {doc_id})"
+
     def build_context(
         self,
         retrieved_documents: List[Dict[str, Any]],
@@ -44,12 +64,15 @@ class ContextBuilder:
 
         Each source receives a citation marker such as [1], [2],
         allowing the LLM to reference the evidence used for its answer.
+
+        The citation number is derived from the retrieval rank, ensuring
+        stable, deterministic numbering that matches the context.
         """
 
         if not retrieved_documents:
             return ""
 
-        context_parts = []
+        context_parts: List[str] = []
 
         for index, doc in enumerate(
             retrieved_documents,
@@ -61,16 +84,27 @@ class ContextBuilder:
             ).strip()
 
             if not content:
+                logger.debug(
+                    "Skipping context entry with empty content "
+                    "(rank=%s, id=%s)",
+                    rank, doc.get("id", "unknown"),
+                )
                 continue
 
             metadata = doc.get("metadata") or {}
 
             source_name = self._source_name(metadata)
             page_label = self._page_label(metadata)
+            score_label = self._format_score(
+                doc.get("score")
+            )
+            doc_id_label = self._format_doc_id(
+                doc.get("id")
+            )
 
             header = (
                 f"[{rank}] Source: {source_name}, "
-                f"Page: {page_label}"
+                f"Page: {page_label}{score_label}{doc_id_label}"
             )
 
             formatted_doc = (
@@ -78,8 +112,13 @@ class ContextBuilder:
                 f"Content: {content}"
             )
 
-            context_parts.append(
-                formatted_doc
-            )
+            context_parts.append(formatted_doc)
 
-        return "\n\n".join(context_parts)
+        result = "\n\n".join(context_parts)
+
+        logger.debug(
+            "Built context with %d sources (%d characters)",
+            len(context_parts), len(result),
+        )
+
+        return result

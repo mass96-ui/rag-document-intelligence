@@ -1,9 +1,12 @@
-﻿from typing import List
+﻿import logging
+from typing import List
 
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from .config import CHUNK_OVERLAP, CHUNK_SIZE
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentChunker:
@@ -43,7 +46,13 @@ class DocumentChunker:
 
         chunks = self.splitter.split_documents(documents)
 
-        print(f"Input documents: {len(documents)}")
-        print(f"Total chunks: {len(chunks)}")
+        chunks = [
+            chunk for chunk in chunks if chunk.page_content.strip()
+        ]
+
+        logger.info(
+            "Chunked %d documents into %d non-empty chunks",
+            len(documents), len(chunks),
+        )
 
         return chunks

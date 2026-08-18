@@ -89,3 +89,112 @@ def test_retriever_rejects_invalid_top_k():
 
     with pytest.raises(ValueError):
         retriever.retrieve("test", top_k=-1)
+
+
+def test_retriever_rejects_oversized_query(mock_vector_store, mock_embedding_manager):
+    retriever = RAGRetriever(
+        vector_store=mock_vector_store,
+        embedding_manager=mock_embedding_manager,
+    )
+    long_query = "x" * 5000
+    with pytest.raises(ValueError, match="maximum length"):
+        retriever.retrieve(long_query)
+
+
+def test_retriever_returns_empty_when_no_results(empty_mock_vector_store, mock_embedding_manager):
+    retriever = RAGRetriever(
+        vector_store=empty_mock_vector_store,
+        embedding_manager=mock_embedding_manager,
+    )
+    results = retriever.retrieve("test query")
+    assert results == []
+
+
+def test_retriever_sorts_deterministically(mock_vector_store, mock_embedding_manager):
+    mock_vector_store.collection = mock_vector_store.collection
+    mock_vector_store.collection.query.return_value = {
+        "ids": [["c", "a", "b"]],
+        "documents": [["Content C", "Content A", "Content B"]],
+        "metadatas": [
+            [{"source_name": "c.pdf"}, {"source_name": "a.pdf"}, {"source_name": "b.pdf"}]
+        ],
+        "distances": [[0.5, 0.1, 0.3]],
+    }
+    retriever = RAGRetriever(
+        vector_store=mock_vector_store,
+        embedding_manager=mock_embedding_manager,
+    )
+    results = retriever.retrieve("test")
+    assert [r["id"] for r in results] == ["a", "b", "c"]
+    assert [r["rank"] for r in results] == [1, 2, 3]
+
+
+def test_retriever_deduplicates_ids(mock_vector_store, mock_embedding_manager):
+    mock_vector_store.collection.query.return_value = {
+        "ids": [["dup", "dup", "unique"]],
+        "documents": [["Content A", "Content A", "Content B"]],
+        "metadatas": [
+            [{"source_name": "a.pdf"}, {"source_name": "a.pdf"}, {"source_name": "b.pdf"}]
+        ],
+        "distances": [[0.1, 0.1, 0.3]],
+    }
+    retriever = RAGRetriever(
+        vector_store=mock_vector_store,
+        embedding_manager=mock_embedding_manager,
+    )
+    results = retriever.retrieve("test")
+    ids = [r["id"] for r in results]
+    assert len(ids) == 2
+    assert "unique" in ids
+    assert ids.count("dup") == 1
+
+
+def test_retriever_normalizes_score(mock_vector_store, mock_embedding_manager):
+    mock_vector_store.collection.query.return_value = {
+        "ids": [["doc1"]],
+        "documents": [["content"]],
+        "metadatas": [[{"source_name": "doc1.pdf"}]],
+        "distances": [[0.0]],
+    }
+    retriever = RAGRetriever(
+        vector_store=mock_vector_store,
+        embedding_manager=mock_embedding_manager,
+        score_threshold=None,
+    )
+    results = retriever.retrieve("test", score_threshold=None)
+    assert results[0]["score"] == 1.0
+    assert results[0]["distance"] == 0.0
+
+
+def test_retriever_score_threshold_filters(mock_vector_store, mock_embedding_manager):
+    mock_vector_store.collection.query.return_value = {
+        "ids": [["a", "b", "c"]],
+        "documents": [["A", "B", "C"]],
+        "metadatas": [
+            [{"source_name": "a.pdf"}, {"source_name": "b.pdf"}, {"source_name": "c.pdf"}]
+        ],
+        "distances": [[0.1, 0.5, 0.9]],
+    }
+    retriever = RAGRetriever(
+        vector_store=mock_vector_store,
+        embedding_manager=mock_embedding_manager,
+    )
+    results = retriever.retrieve("test", score_threshold=0.6)
+    assert len(results) == 2
+    assert all(r["distance"] <= 0.6 for r in results)
+
+
+def test_retriever_handles_mismatched_list_lengths(mock_vector_store, mock_embedding_manager):
+    mock_vector_store.collection.query.return_value = {
+        "ids": [["a", "b", "c"]],
+        "documents": [["A", "B"]],
+        "metadatas": [[{"source_name": "a.pdf"}, {"source_name": "b.pdf"}]],
+        "distances": [[0.1, 0.5, 0.9]],
+    }
+    retriever = RAGRetriever(
+        vector_store=mock_vector_store,
+        embedding_manager=mock_embedding_manager,
+    )
+    results = retriever.retrieve("test", score_threshold=2.0)
+    assert len(results) == 2
+    assert {r["id"] for r in results} == {"a", "b"}
