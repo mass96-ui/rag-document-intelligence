@@ -33,3 +33,6 @@ data/vector_store/
 
 # ChromaDB and local vector-store backups
 data/vector_store*/
+
+# Python packaging
+*.egg-info/

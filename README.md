@@ -1,190 +1,107 @@
-\# RAG Project
+# RAG Document Intelligence
 
+A modular Retrieval-Augmented Generation (RAG) system for document ingestion, semantic retrieval, context construction, and LLM-based answer generation.
 
+This project demonstrates how the major components of a RAG system can be separated into independent, testable modules.
 
-A document-based Retrieval-Augmented Generation (RAG) system for loading documents, generating semantic embeddings, storing those embeddings in ChromaDB, and retrieving relevant information for user queries.
+---
 
+## Project Objective
 
+The goal of this project is to build a practical RAG pipeline that can:
 
-The project is currently focused on building and validating a reliable document ingestion and retrieval pipeline before adding the final LLM response-generation and application layers.
+1. Load PDF and text documents.
+2. Extract document content and metadata.
+3. Split documents into smaller overlapping chunks.
+4. Generate semantic embeddings.
+5. Store embeddings persistently in ChromaDB.
+6. Retrieve relevant document chunks for a user query.
+7. Build structured context from retrieved documents.
+8. Generate an answer through a provider-independent LLM interface.
+9. Return the generated answer together with the retrieved source documents.
 
+The system is designed incrementally so that each stage can be developed, tested, and replaced independently.
 
+---
 
-\---
-
-
-
-\## Project Objective
-
-
-
-The objective of this project is to build a practical RAG pipeline that can:
-
-
-
-1\. Load documents such as PDF and text files.
-
-2\. Extract document content.
-
-3\. Split documents into smaller chunks.
-
-4\. Generate semantic embeddings.
-
-5\. Store embeddings persistently in ChromaDB.
-
-6\. Retrieve relevant document chunks for user queries.
-
-7\. Preserve document metadata such as source and page.
-
-8\. Use retrieved context as the foundation for grounded LLM responses.
-
-
-
-The system is being developed incrementally so that each stage can be implemented and validated independently.
-
-
-
-\---
-
-
-
-\## Current Implementation
-
-
+## Current Implementation
 
 The current implementation includes:
 
+- PDF document loading
+- Text document loading
+- Document chunking
+- Sentence Transformer embeddings
+- `all-MiniLM-L6-v2` embedding model
+- 384-dimensional embeddings
+- Persistent ChromaDB vector storage
+- Deterministic document IDs
+- Duplicate chunk prevention
+- Source and page metadata preservation
+- Top-K semantic retrieval
+- RAG retriever
+- Context builder
+- Provider-independent LLM abstraction
+- Mock LLM provider for testing
+- End-to-end RAG pipeline orchestration
+- Automated unit tests
+- Python package configuration using `pyproject.toml`
 
+The current implementation does **not require Ollama or any external LLM service** because the pipeline can be tested using the included `MockLLMProvider`.
 
-\- PDF document loading
+A real LLM provider can be integrated later without changing the core retrieval and orchestration components.
 
-\- Text document loading
+---
 
-\- Document chunking
-
-\- Sentence Transformers embeddings
-
-\- `all-MiniLM-L6-v2` embedding model
-
-\- 384-dimensional embeddings
-
-\- Persistent ChromaDB vector storage
-
-\- Stable document IDs
-
-\- Duplicate document prevention
-
-\- Source and page metadata preservation
-
-\- Top-K semantic retrieval
-
-\- RAG retriever implementation
-
-\- Notebook-based development and validation
-
-
-
-The current validation corpus includes an internship report PDF and sample text documents.
-
-
-
-The current ingestion pipeline produces 61 document chunks.
-
-
-
-\---
-
-
-
-\## Technology Stack
-
-
-
-| Component | Technology |
-
-|---|---|
-
-| Programming Language | Python |
-
-| Document Processing | LangChain Community |
-
-| PDF Processing | PyMuPDF |
-
-| Embeddings | Sentence Transformers |
-
-| Embedding Model | all-MiniLM-L6-v2 |
-
-| Vector Database | ChromaDB |
-
-| Development Environment | Jupyter Notebook |
-
-| Environment Management | Python virtual environment |
-
-
-
-\---
-
-
-
-\## Architecture
-
-
+## Architecture
 
 ```text
-
-Documents
-
-&#x20;   |
-
-&#x20;   v
-
-Document Loaders
-
-&#x20;   |
-
-&#x20;   v
-
-Document Chunking
-
-&#x20;   |
-
-&#x20;   v
-
-Sentence Transformer
-
-&#x20;   |
-
-&#x20;   v
-
-Semantic Embeddings
-
-&#x20;   |
-
-&#x20;   v
-
-ChromaDB
-
-&#x20;   |
-
-&#x20;   v
-
-RAG Retriever
-
-&#x20;   |
-
-&#x20;   v
-
-Relevant Context
-
-&#x20;   |
-
-&#x20;   v
-
-LLM Response Generation
-
-&#x20;   |
-
-&#x20;   v
-
-Grounded Answer
-
+                         INGESTION
+                            |
+                            v
+                    +----------------+
+                    |    Documents   |
+                    +-------+--------+
+                            |
+                            v
+                    +----------------+
+                    | DocumentLoader |
+                    +-------+--------+
+                            |
+                            v
+                    +----------------+
+                    |    Chunking    |
+                    +-------+--------+
+                            |
+                            v
+                    +----------------+
+                    |   Embeddings   |
+                    +-------+--------+
+                            |
+                            v
+                    +----------------+
+                    |    ChromaDB    |
+                    +-------+--------+
+                            |
+                            |
+                         RETRIEVAL
+                            |
+                            v
+                    +----------------+
+                    |  RAGRetriever  |
+                    +-------+--------+
+                            |
+                            v
+                    +----------------+
+                    | ContextBuilder |
+                    +-------+--------+
+                            |
+                            v
+                    +----------------+
+                    |  LLMProvider   |
+                    +-------+--------+
+                            |
+                            v
+                    +----------------+
+                    | Grounded Answer|
+                    +----------------+

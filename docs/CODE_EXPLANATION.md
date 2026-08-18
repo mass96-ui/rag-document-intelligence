@@ -2,22 +2,20 @@
 
 ## 1. Project Overview
 
-RAG Document Intelligence is a Retrieval-Augmented Generation (RAG) document processing and retrieval pipeline.
+RAG Document Intelligence is a modular Retrieval-Augmented Generation (RAG) pipeline for document processing, retrieval, and answer generation.
 
-The current implementation focuses on the retrieval layer. It processes documents, converts them into semantic vector representations, stores those vectors in ChromaDB, and retrieves the most relevant document chunks for a user query.
+The generation layer is provider-independent through the LLMProvider abstraction, allowing different LLM implementations to be integrated without changing the core retrieval and orchestration pipeline.
 
-The current pipeline is:
+The current architecture is:
 
-Documents
--> Document Loading
--> Document Chunking
--> Embedding Generation
--> Vector Storage
--> Query Embedding
--> Semantic Retrieval
--> Relevant Document Chunks
-
-The LLM generation layer will be added in a later stage.
+Document Loading
+→ Chunking
+→ Embeddings
+→ ChromaDB Vector Storage
+→ Semantic Retrieval
+→ Context Building
+→ LLM Provider
+→ Answer
 
 ---
 
@@ -30,10 +28,14 @@ src/rag_document_intelligence/
 |-- chunking.py
 |-- embeddings.py
 |-- vector_store.py
-`-- retriever.py
+|-- retriever.py
+|-- context_builder.py
+|-- llm.py
+`-- pipeline.py
 
 tests/
-`-- test_rag_pipeline.py
+|-- test_rag_pipeline.py
+`-- test_llm_pipeline.py
 
 docs/
 `-- CODE_EXPLANATION.md
@@ -42,370 +44,135 @@ docs/
 
 ## 3. Architecture
 
-The pipeline is divided into independent components.
+The pipeline is divided into independent, modular components.
 
 ### 3.1 Configuration
 
-File:
+File: `src/rag_document_intelligence/config.py`
 
-src/rag_document_intelligence/config.py
-
-This module centralizes configuration used by the RAG pipeline.
-
-It defines:
-
-- Project root directory
-- Source document directory
-- Persistent ChromaDB directory
-- ChromaDB collection name
-- Sentence Transformer embedding model
-- Chunk size
-- Chunk overlap
-- Default retrieval count
-
-Current defaults:
-
-- Embedding model: all-MiniLM-L6-v2
-- Chunk size: 500 characters
-- Chunk overlap: 50 characters
-- Default Top-K: 5
-
-Centralizing configuration makes the system easier to maintain and modify.
+Centralizes configuration for the pipeline, including directories, model names, chunking parameters, and retrieval settings.
 
 ---
 
 ## 4. Document Loading
 
-File:
+File: `src/rag_document_intelligence/loaders.py`
 
-src/rag_document_intelligence/loaders.py
-
-The DocumentLoader component is responsible for loading source documents from the configured document directory.
-
-Currently supported document types:
-
-- TXT files
-- PDF files
-
-TXT files are loaded using TextLoader.
-
-PDF files are loaded using PyMuPDFLoader.
-
-The loader returns LangChain Document objects containing:
-
-- Document content
-- Source metadata
-- Page metadata where available
-
-The main methods are:
-
-- load_text_documents()
-- load_pdf_documents()
-- load_all_documents()
+Handles loading of PDF and TXT documents using LangChain loaders.
 
 ---
 
 ## 5. Document Chunking
 
-File:
+File: `src/rag_document_intelligence/chunking.py`
 
-src/rag_document_intelligence/chunking.py
-
-Large documents cannot always be passed directly into an embedding model or retrieval system.
-
-The DocumentChunker component splits documents into smaller overlapping chunks using RecursiveCharacterTextSplitter.
-
-Current configuration:
-
-- Chunk size: 500 characters
-- Chunk overlap: 50 characters
-
-The overlap helps preserve contextual information between neighboring chunks.
-
-The component also validates its configuration and rejects invalid values such as:
-
-- Zero or negative chunk size
-- Negative chunk overlap
-- Chunk overlap greater than or equal to chunk size
-
-Main method:
-
-- split_documents()
+Splits documents into smaller overlapping chunks using `RecursiveCharacterTextSplitter`.
 
 ---
 
 ## 6. Embedding Generation
 
-File:
+File: `src/rag_document_intelligence/embeddings.py`
 
-src/rag_document_intelligence/embeddings.py
-
-The EmbeddingManager converts text into numerical vector representations.
-
-The current model is:
-
-all-MiniLM-L6-v2
-
-The model is provided through Sentence Transformers.
-
-The embedding process is:
-
-Text
--> Sentence Transformer
--> Numerical Vector
-
-The same embedding model is used for both:
-
-- Document chunks
-- User queries
-
-This allows semantic similarity to be calculated between a user's question and stored document chunks.
-
-Main method:
-
-- generate_embeddings()
+Generates semantic embeddings using Sentence Transformers (default: `all-MiniLM-L6-v2`).
 
 ---
 
 ## 7. Vector Storage
 
-File:
+File: `src/rag_document_intelligence/vector_store.py`
 
-src/rag_document_intelligence/vector_store.py
-
-The VectorStore component manages persistent vector storage using ChromaDB.
-
-It is responsible for:
-
-- Initializing the persistent ChromaDB client
-- Creating or reusing the document collection
-- Storing document chunks
-- Storing embeddings
-- Storing document metadata
-- Generating deterministic document IDs
-- Preventing duplicate chunks from being inserted
-
-The vector store is persisted locally under:
-
-data/vector_store/
-
-The collection name is:
-
-pdf_documents
-
-### Deterministic Document IDs
-
-Each document chunk receives an ID based on:
-
-- Document source
-- Page information
-- Content hash
-
-The content hash is generated using SHA-256.
-
-This allows the same chunk to produce the same ID across repeated ingestion operations and prevents duplicate records from being inserted.
-
-Main methods:
-
-- add_documents()
-- count()
+Manages persistent storage and duplicate prevention using ChromaDB.
 
 ---
 
 ## 8. Semantic Retrieval
 
-File:
+File: `src/rag_document_intelligence/retriever.py`
 
-src/rag_document_intelligence/retriever.py
+Performs similarity searches in ChromaDB to find the most relevant document chunks for a query.
 
-The RAGRetriever component retrieves document chunks that are semantically relevant to a user's query.
+---
 
-The retrieval process is:
+## 9. Context Building
 
-User Query
--> Query Embedding
--> ChromaDB Similarity Search
--> Top-K Results
--> Optional Distance Filtering
--> Retrieved Documents
+File: `src/rag_document_intelligence/context_builder.py`
 
-For each retrieved result, the system returns:
+Transforms retrieved document chunks into a single formatted string for the LLM.
 
-- Document ID
-- Document content
-- Metadata
-- Distance
+It preserves:
 - Retrieval rank
+- Source document name
+- Page numbers
+- Document content
 
-The retriever also validates:
-
-- Empty queries
-- Invalid Top-K values
-
-Main method:
-
-- retrieve()
+This ensures the LLM has the necessary context and metadata to generate grounded answers with potential citations.
 
 ---
 
-## 9. Complete Data Flow
+## 10. LLM Abstraction
 
-The complete current flow is:
+File: `src/rag_document_intelligence/llm.py`
 
+Provides a provider-independent interface for Large Language Models.
+
+- **LLMProvider (ABC)**: Abstract base class defining the `generate(query, context)` interface.
+- **MockLLMProvider**: A mock implementation used for testing and validation without requiring external APIs or local models like Ollama.
+
+This design allows for easy integration of various providers (Ollama, OpenAI, Gemini, etc.) in future stages.
+
+---
+
+## 11. RAG Pipeline Orchestration
+
+File: `src/rag_document_intelligence/pipeline.py`
+
+The `RAGPipeline` class orchestrates the complete end-to-end flow:
+1. **Retrieve**: Get relevant chunks via `RAGRetriever`.
+2. **Build Context**: Format chunks via `ContextBuilder`.
+3. **Generate**: Get the final answer via an `LLMProvider`.
+
+---
+
+## 12. Complete Data Flow
+
+```text
                     DOCUMENT INGESTION
+Documents -> Loader -> Chunker -> EmbeddingManager -> VectorStore -> ChromaDB
 
-Documents
-    |
-    v
-DocumentLoader
-    |
-    v
-Loaded Documents
-    |
-    v
-DocumentChunker
-    |
-    v
-Document Chunks
-    |
-    v
-EmbeddingManager
-    |
-    v
-Document Embeddings
-    |
-    v
-VectorStore
-    |
-    v
-ChromaDB
-
-
-                    QUERY RETRIEVAL
-
-User Query
-    |
-    v
-EmbeddingManager
-    |
-    v
-Query Embedding
-    |
-    v
-ChromaDB Similarity Search
-    |
-    v
-RAGRetriever
-    |
-    v
-Relevant Document Chunks
+                    QUERY & RESPONSE
+User Query -> EmbeddingManager -> ChromaDB -> RAGRetriever -> ContextBuilder -> LLMProvider -> Answer
+```
 
 ---
 
-## 10. Current Project Scope
+## 13. Current Project Scope
 
-The current implementation covers the retrieval side of a RAG system:
+The current implementation provides a complete, modular RAG foundation:
+1. Full ingestion pipeline (PDF/TXT).
+2. Persistent semantic search.
+3. Modular context construction.
+4. Provider-independent LLM interface.
+5. Automated testing with mock providers.
 
-1. Document ingestion
-2. PDF and TXT document loading
-3. Document chunking
-4. Semantic embedding generation
-5. Persistent vector storage
-6. Duplicate prevention
-7. Semantic similarity retrieval
-8. Retrieval distance filtering
-9. Automated unit testing
-
-The LLM generation and response synthesis layer is intentionally not included in the current stage.
-
-Future stages can add:
-
-- LLM-based answer generation
-- Retrieval-Augmented answer synthesis
-- Prompt management
-- Citation generation
-- Reranking
-- Evaluation metrics
-- Conversational memory
-- API integration
+Ollama is NOT required for the current implementation, but the system is designed to support it as a provider in the next phase.
 
 ---
 
-## 11. Testing
+## 14. Testing
 
-The project currently contains 6 automated tests.
+The project contains two test suites:
+- `tests/test_rag_pipeline.py`: Validates the retrieval foundation.
+- `tests/test_llm_pipeline.py`: Validates context building, LLM abstraction, and pipeline orchestration.
 
-The test suite covers:
-
-- TXT document loading
-- Document chunking
-- Invalid chunk configuration
-- Deterministic vector-store document IDs
-- Empty retrieval queries
-- Invalid retrieval parameters
-
-Current validation result:
-
-6 passed
-
-The tests are designed to validate core behavior without requiring a full external LLM generation pipeline.
+Total Tests: 10 passed.
 
 ---
 
-## 12. Dependencies
+## 15. Next Development Stage
 
-The main technologies currently used are:
-
-- Python
-- LangChain
-- LangChain Core
-- LangChain Community
-- LangChain Text Splitters
-- ChromaDB
-- PyMuPDF
-- Sentence Transformers
-- NumPy
-- Pytest
-
-The runtime and development dependencies are maintained in:
-
-requirements.txt
-
----
-
-## 13. Current Limitations
-
-The current implementation is intentionally focused on document retrieval.
-
-Current limitations include:
-
-- No LLM response generation
-- No REST API layer
-- No user authentication
-- No conversational memory
-- No production database
-- No advanced retrieval reranking
-- No retrieval evaluation framework
-- Local ChromaDB persistence only
-- LangChain Community document loaders are currently used
-
-These limitations are expected because the current stage establishes the core RAG retrieval foundation.
-
----
-
-## 14. Next Development Stage
-
-The next stage can extend the current retrieval pipeline into a complete RAG system:
-
-Document
--> Chunk
--> Embed
--> Store
--> Retrieve
--> Rerank
--> Prompt Construction
--> LLM
--> Generated Answer
--> Source Citations
-
-The existing retrieval components are designed to provide the foundation for this future generation layer.
+The next stage will involve:
+1. Manual installation of Ollama.
+2. Implementation of an `OllamaProvider`.
+3. End-to-end testing with real local models (e.g., Qwen2.5-Coder).
+4. Refinement of prompt templates.
