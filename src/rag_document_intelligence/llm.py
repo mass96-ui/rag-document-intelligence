@@ -1,4 +1,9 @@
 from abc import ABC, abstractmethod
+from typing import Optional
+
+import requests
+
+from .config import OLLAMA_BASE_URL, OLLAMA_MODEL
 
 
 class LLMProvider(ABC):
@@ -6,59 +11,108 @@ class LLMProvider(ABC):
 
     @abstractmethod
     def generate(self, query: str, context: str) -> str:
-        """
-        Generate an answer for the given query based on the provided context.
-
-        Args:
-            query: The user's question.
-            context: The retrieved document context.
-
-        Returns:
-            The generated answer string.
-        """
-        pass
+        """Generate an answer using the supplied query and context."""
+        raise NotImplementedError
 
 
 class MockLLMProvider(LLMProvider):
-    """A mock LLM provider for testing and validation."""
+    """Deterministic provider used for testing."""
 
     def generate(self, query: str, context: str) -> str:
-        """
-        Return a deterministic mock response.
-
-        The response includes parts of the query and context to verify
-        that the data was passed correctly.
-        """
-        # Truncate context for display in the mock answer
         context_preview = (
-            context[:100] + "..." if len(context) > 100 else context
+            context[:100] + "..."
+            if len(context) > 100
+            else context
         )
 
         return (
-            f"[MOCK RESPONSE]\n"
+            "[MOCK RESPONSE]\n"
             f"Question: {query}\n"
-            f"Based on the provided context (Preview: {context_preview}), "
-            f"this is a simulated answer."
+            f"Based on the provided context "
+            f"(Preview: {context_preview}), "
+            "this is a simulated answer."
         )
 
 
-def get_llm_provider(provider_name: str = "mock") -> LLMProvider:
-    """
-    Factory function to get an LLM provider by name.
+class OllamaLLMProvider(LLMProvider):
+    """Local LLM provider using the Ollama HTTP API."""
 
-    Args:
-        provider_name: The name of the provider to use.
+    def __init__(
+        self,
+        base_url: str = OLLAMA_BASE_URL,
+        model: str = OLLAMA_MODEL,
+        timeout: int = 120,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.model = model
+        self.timeout = timeout
 
-    Returns:
-        An instance of an LLMProvider.
-    """
-    providers = {
-        "mock": MockLLMProvider,
-    }
+    def generate(self, query: str, context: str) -> str:
+        if not context.strip():
+            return (
+                "I could not answer the question because "
+                "no relevant document context was retrieved."
+            )
 
-    if provider_name not in providers:
-        # Fallback to mock for beginners/testing
-        print(f"Warning: Provider '{provider_name}' not implemented. Using 'mock' instead.")
+        prompt = f"""You are a document question-answering assistant.
+
+Answer the user's question using ONLY the provided context.
+
+If the answer cannot be found in the context, say:
+"I could not find this information in the provided documents."
+
+Do not invent facts.
+
+Context:
+{context}
+
+Question:
+{query}
+
+Answer:"""
+
+        response = requests.post(
+            f"{self.base_url}/api/generate",
+            json={
+                "model": self.model,
+                "prompt": prompt,
+                "stream": False,
+            },
+            timeout=self.timeout,
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        answer = data.get("response", "").strip()
+
+        if not answer:
+            raise RuntimeError(
+                "Ollama returned an empty response."
+            )
+
+        return answer
+
+
+def get_llm_provider(
+    provider_name: Optional[str] = None,
+) -> LLMProvider:
+    """Create an LLM provider from configuration."""
+
+    from .config import LLM_PROVIDER
+
+    provider = (
+        provider_name or LLM_PROVIDER
+    ).lower().strip()
+
+    if provider == "mock":
         return MockLLMProvider()
 
-    return providers[provider_name]()
+    if provider == "ollama":
+        return OllamaLLMProvider()
+
+    raise ValueError(
+        f"Unsupported LLM provider: '{provider}'. "
+        "Supported providers: mock, ollama."
+    )

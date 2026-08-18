@@ -1,35 +1,51 @@
-from typing import Any, Dict, List
+﻿from typing import Any, Dict, List
 
 
 class ContextBuilder:
-    """Transform retrieved document chunks into formatted LLM context."""
+    """Build structured context from retrieved RAG documents."""
 
     def build_context(
         self,
         retrieved_documents: List[Dict[str, Any]],
     ) -> str:
         """
-        Format a list of retrieved documents into a single context string.
+        Convert retrieved document chunks into structured LLM context.
 
-        Each document should include:
+        Each retrieved document may contain:
         - content
-        - metadata (source, page)
+        - metadata
         - rank
         """
+
         if not retrieved_documents:
             return ""
 
         context_parts = []
 
-        for doc in retrieved_documents:
-            rank = doc.get("rank", "N/A")
-            content = doc.get("content", "").strip()
-            metadata = doc.get("metadata", {})
-            source = metadata.get("source", "unknown")
-            page = metadata.get("page", metadata.get("pages", "unknown"))
+        for index, doc in enumerate(retrieved_documents, start=1):
+            rank = doc.get("rank", index)
+            content = str(doc.get("content", "")).strip()
 
+            if not content:
+                continue
+
+            metadata = doc.get("metadata") or {}
+
+            source = metadata.get("source", "unknown")
+            page = metadata.get(
+                "page",
+                metadata.get("pages", "unknown"),
+            )
+
+            # Keep the original source header format for compatibility
+            # with existing tests and downstream code.
             header = f"[{rank}] Source: {source}, Page: {page}"
-            formatted_doc = f"{header}\nContent: {content}"
+
+            formatted_doc = (
+                f"{header}\n"
+                f"Content: {content}"
+            )
+
             context_parts.append(formatted_doc)
 
         return "\n\n".join(context_parts)

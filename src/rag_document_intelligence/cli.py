@@ -1,12 +1,12 @@
-import sys
+﻿import sys
 from typing import Any, Dict
 
 from .config import (
     COLLECTION_NAME,
-    EMBEDDING_MODEL_NAME,
-    VECTOR_STORE_DIR,
-    LLM_PROVIDER,
     DEFAULT_TOP_K,
+    EMBEDDING_MODEL_NAME,
+    LLM_PROVIDER,
+    VECTOR_STORE_DIR,
 )
 from .context_builder import ContextBuilder
 from .embeddings import EmbeddingManager
@@ -16,74 +16,129 @@ from .retriever import RAGRetriever
 from .vector_store import VectorStore
 
 
-def print_response(result: Dict[str, Any]):
-    """Print the RAG response in a user-friendly format."""
-    print("\n" + "="*50)
-    print("QUESTION:", result["query"])
-    print("="*50)
-    print("\nANSWER:")
+def print_response(result: Dict[str, Any]) -> None:
+    """Display a RAG result in a readable format."""
+
+    print("\n" + "=" * 60)
+    print("ANSWER")
+    print("=" * 60)
     print(result["answer"])
-    print("\n" + "-"*50)
-    
-    if result["source_documents"]:
-        print(f"SOURCES ({len(result['source_documents'])} chunks retrieved, context length: {result['context_length']}):")
-        for doc in result["source_documents"]:
-            metadata = doc.get("metadata", {})
-            source = metadata.get("source", "unknown")
-            page = metadata.get("page", metadata.get("pages", "unknown"))
-            rank = doc.get("rank", "N/A")
-            print(f"[{rank}] {source} (Page {page})")
+
+    print("\n" + "-" * 60)
+    print("RETRIEVED SOURCES")
+    print("-" * 60)
+
+    source_documents = result.get("source_documents", [])
+
+    if not source_documents:
+        print("No relevant documents found.")
     else:
-        print("SOURCES: No relevant documents found.")
-    print("="*50 + "\n")
+        for index, doc in enumerate(source_documents, start=1):
+            metadata = doc.get("metadata") or {}
+
+            source = metadata.get("source", "unknown")
+            page = metadata.get(
+                "page",
+                metadata.get("pages", "unknown"),
+            )
+
+            rank = doc.get("rank", index)
+
+            print(
+                f"[{rank}] {source} | Page: {page}"
+            )
+
+    print(
+        f"\nRetrieved chunks: {len(source_documents)}"
+    )
+    print(
+        f"Context length: {result.get('context_length', 0)} characters"
+    )
+
+    print("=" * 60)
 
 
-def run_app():
-    """Main CLI loop for querying the RAG pipeline."""
-    print("--- RAG Document Intelligence CLI ---")
-    print(f"Loading vector store from: {VECTOR_STORE_DIR}")
-    print(f"Using LLM Provider: {LLM_PROVIDER}")
+def create_pipeline() -> RAGPipeline:
+    """Initialize all RAG pipeline components."""
 
-    # 1. Initialize the pipeline
+    embedding_manager = EmbeddingManager(
+        model_name=EMBEDDING_MODEL_NAME
+    )
+
+    vector_store = VectorStore(
+        persist_directory=str(VECTOR_STORE_DIR),
+        collection_name=COLLECTION_NAME,
+    )
+
+    retriever = RAGRetriever(
+        vector_store,
+        embedding_manager,
+    )
+
+    context_builder = ContextBuilder()
+
+    llm_provider = get_llm_provider(
+        LLM_PROVIDER
+    )
+
+    return RAGPipeline(
+        retriever,
+        context_builder,
+        llm_provider,
+    )
+
+
+def run_app() -> None:
+    """Run the interactive RAG command-line application."""
+
+    print("\n" + "=" * 60)
+    print("             RAG DOCUMENT INTELLIGENCE")
+    print("=" * 60)
+
+    print(f"Embedding model : {EMBEDDING_MODEL_NAME}")
+    print(f"Vector database : ChromaDB")
+    print(f"LLM provider    : {LLM_PROVIDER}")
+    print(f"Top-K retrieval : {DEFAULT_TOP_K}")
+
+    print("\nInitializing RAG pipeline...")
+
     try:
-        embedding_manager = EmbeddingManager(model_name=EMBEDDING_MODEL_NAME)
-        vector_store = VectorStore(
-            persist_directory=str(VECTOR_STORE_DIR),
-            collection_name=COLLECTION_NAME
-        )
-        retriever = RAGRetriever(vector_store, embedding_manager)
-        context_builder = ContextBuilder()
-        llm_provider = get_llm_provider(LLM_PROVIDER)
-
-        pipeline = RAGPipeline(retriever, context_builder, llm_provider)
-    except Exception as e:
-        print(f"Error initializing pipeline: {e}")
+        pipeline = create_pipeline()
+    except Exception as exc:
+        print(f"\nFailed to initialize RAG pipeline: {exc}")
         sys.exit(1)
 
-    print("Pipeline ready! Type your question or 'exit' to quit.")
+    print("\nPipeline ready.")
+    print("Type your question.")
+    print("Type 'exit' or 'quit' to close the application.")
 
     while True:
         try:
             query = input("\nAsk a question: ").strip()
-            
-            if query.lower() in ["exit", "quit"]:
-                print("Goodbye!")
+
+            if query.lower() in {"exit", "quit"}:
+                print("\nGoodbye!")
                 break
-            
+
             if not query:
+                print("Please enter a question.")
                 continue
 
-            # Run the pipeline
-            result = pipeline.answer(query, top_k=DEFAULT_TOP_K)
-            
-            # Display results
+            result = pipeline.answer(
+                query,
+                top_k=DEFAULT_TOP_K,
+            )
+
             print_response(result)
 
         except KeyboardInterrupt:
-            print("\nGoodbye!")
+            print("\n\nGoodbye!")
             break
-        except Exception as e:
-            print(f"\nAn unexpected error occurred: {e}")
+
+        except Exception as exc:
+            print(
+                f"\nAn unexpected error occurred: {exc}"
+            )
 
 
 if __name__ == "__main__":

@@ -36,3 +36,5 @@ data/vector_store*/
 
 # Python packaging
 *.egg-info/
+
+.env
