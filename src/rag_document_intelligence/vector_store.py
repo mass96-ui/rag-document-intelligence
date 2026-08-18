@@ -1,10 +1,14 @@
-﻿from pathlib import Path
-from typing import Any, List
+﻿import hashlib
+import logging
+from pathlib import Path
+from typing import Any, List, Optional
 
 import chromadb
 import numpy as np
 
 from .config import COLLECTION_NAME, VECTOR_STORE_DIR
+
+logger = logging.getLogger(__name__)
 
 
 class VectorStore:
@@ -13,13 +17,13 @@ class VectorStore:
     def __init__(
         self,
         collection_name: str = COLLECTION_NAME,
-        persist_directory: Path = VECTOR_STORE_DIR,
+        persist_directory: Path | str = VECTOR_STORE_DIR,
     ):
         self.collection_name = collection_name
         self.persist_directory = Path(persist_directory)
 
-        self.client = None
-        self.collection = None
+        self.client: chromadb.PersistentClient | None = None
+        self.collection: Optional[chromadb.Collection] = None
 
         self._initialize_store()
 
@@ -45,20 +49,18 @@ class VectorStore:
                 },
             )
 
-            print(
-                "Vector store initialized. "
-                f"Collection: {self.collection_name}"
+            logger.info(
+                "Vector store initialized. Collection: %s",
+                self.collection_name,
             )
 
-            print(
-                "Existing documents in collection: "
-                f"{self.collection.count()}"
+            logger.info(
+                "Existing documents in collection: %d",
+                self.collection.count(),
             )
 
         except Exception as exc:
-            print(
-                f"Error initializing vector store: {exc}"
-            )
+            logger.error("Error initializing vector store: %s", exc)
             raise
 
     @staticmethod
@@ -66,12 +68,13 @@ class VectorStore:
         document: Any,
     ) -> str:
         """Create a stable ID from document source, page and content."""
-        import hashlib
-
         source = str(
             document.metadata.get(
-                "source",
-                "unknown",
+                "source_name",
+                document.metadata.get(
+                    "source",
+                    "unknown",
+                ),
             )
         )
 
@@ -109,24 +112,22 @@ class VectorStore:
             )
 
         if not documents:
-            print("No documents to add.")
+            logger.info("No documents to add.")
             return 0
 
-        ids = []
-        metadatas = []
-        document_texts = []
-        embedding_list = []
+        ids: List[str] = []
+        metadatas: List[dict] = []
+        document_texts: List[str] = []
+        embedding_list: List[List[float]] = []
 
         for index, (document, embedding) in enumerate(
-            zip(documents, embeddings)
+            zip(documents, embeddings),
         ):
             document_id = self._create_document_id(
                 document
             )
 
-            metadata = dict(
-                document.metadata
-            )
+            metadata = dict(document.metadata)
 
             metadata["doc_index"] = index
             metadata["content_length"] = len(
@@ -135,12 +136,8 @@ class VectorStore:
 
             ids.append(document_id)
             metadatas.append(metadata)
-            document_texts.append(
-                document.page_content
-            )
-            embedding_list.append(
-                embedding.tolist()
-            )
+            document_texts.append(document.page_content)
+            embedding_list.append(embedding.tolist())
 
         try:
             existing = self.collection.get(
@@ -148,9 +145,7 @@ class VectorStore:
                 include=[],
             )
 
-            existing_ids = set(
-                existing["ids"]
-            )
+            existing_ids = set(existing["ids"])
 
             new_indexes = [
                 index
@@ -159,17 +154,14 @@ class VectorStore:
             ]
 
             if not new_indexes:
-                print(
+                logger.info(
                     "No new documents to add. "
-                    "All chunks already exist "
-                    "in ChromaDB."
+                    "All chunks already exist in ChromaDB."
                 )
-
-                print(
-                    "Total documents in collection: "
-                    f"{self.collection.count()}"
+                logger.info(
+                    "Total documents in collection: %d",
+                    self.collection.count(),
                 )
-
                 return 0
 
             self.collection.add(
@@ -192,31 +184,25 @@ class VectorStore:
             )
 
             added_count = len(new_indexes)
-            skipped_count = (
-                len(ids) - added_count
-            )
+            skipped_count = len(ids) - added_count
 
-            print(
-                f"Added {added_count} new "
-                "document chunks."
+            logger.info(
+                "Added %d new document chunks.", added_count
             )
-
-            print(
-                f"Skipped {skipped_count} "
-                "existing chunks."
+            logger.info(
+                "Skipped %d existing chunks.", skipped_count
             )
-
-            print(
-                "Total documents in collection: "
-                f"{self.collection.count()}"
+            logger.info(
+                "Total documents in collection: %d",
+                self.collection.count(),
             )
 
             return added_count
 
         except Exception as exc:
-            print(
-                "Error adding documents to "
-                f"vector store: {exc}"
+            logger.error(
+                "Error adding documents to vector store: %s",
+                exc,
             )
             raise
 

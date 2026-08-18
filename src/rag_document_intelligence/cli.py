@@ -1,4 +1,5 @@
-﻿import sys
+﻿import logging
+import sys
 from typing import Any, Dict
 
 from .config import (
@@ -6,6 +7,7 @@ from .config import (
     DEFAULT_TOP_K,
     EMBEDDING_MODEL_NAME,
     LLM_PROVIDER,
+    MAX_QUERY_LENGTH,
     VECTOR_STORE_DIR,
 )
 from .context_builder import ContextBuilder
@@ -14,6 +16,42 @@ from .llm import get_llm_provider
 from .pipeline import RAGPipeline
 from .retriever import RAGRetriever
 from .vector_store import VectorStore
+
+logger = logging.getLogger(__name__)
+
+
+def _configure_logging() -> None:
+    """Configure logging for CLI usage."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(message)s",
+        stream=sys.stderr,
+    )
+
+
+def _safe_source(doc: Dict[str, Any], index: int) -> str:
+    """Return a human-readable source label for a retrieved doc."""
+    metadata = doc.get("metadata") or {}
+    source_name = metadata.get("source_name")
+    if source_name:
+        return str(source_name)
+    source = metadata.get("source", "unknown")
+    if source and source != "unknown":
+        from pathlib import Path
+        return Path(str(source)).name
+    return "unknown"
+
+
+def _safe_page(doc: Dict[str, Any]) -> str:
+    """Return a human-readable page label for a retrieved doc."""
+    metadata = doc.get("metadata") or {}
+    page = metadata.get(
+        "page",
+        metadata.get("pages", "unknown"),
+    )
+    if page is None:
+        return "unknown"
+    return str(page)
 
 
 def print_response(result: Dict[str, Any]) -> None:
@@ -34,18 +72,19 @@ def print_response(result: Dict[str, Any]) -> None:
         print("No relevant documents found.")
     else:
         for index, doc in enumerate(source_documents, start=1):
-            metadata = doc.get("metadata") or {}
-
-            source = metadata.get("source", "unknown")
-            page = metadata.get(
-                "page",
-                metadata.get("pages", "unknown"),
-            )
-
             rank = doc.get("rank", index)
+            source = _safe_source(doc, index)
+            page = _safe_page(doc)
+            score = doc.get("score")
+            score_str = ""
+            if score is not None:
+                try:
+                    score_str = f" | Score: {float(score):.3f}"
+                except (TypeError, ValueError):
+                    pass
 
             print(
-                f"[{rank}] {source} | Page: {page}"
+                f"[{rank}] {source} | Page: {page}{score_str}"
             )
 
     print(
@@ -66,7 +105,7 @@ def create_pipeline() -> RAGPipeline:
     )
 
     vector_store = VectorStore(
-        persist_directory=str(VECTOR_STORE_DIR),
+        persist_directory=VECTOR_STORE_DIR,
         collection_name=COLLECTION_NAME,
     )
 
@@ -91,6 +130,8 @@ def create_pipeline() -> RAGPipeline:
 def run_app() -> None:
     """Run the interactive RAG command-line application."""
 
+    _configure_logging()
+
     print("\n" + "=" * 60)
     print("             RAG DOCUMENT INTELLIGENCE")
     print("=" * 60)
@@ -99,13 +140,19 @@ def run_app() -> None:
     print(f"Vector database : ChromaDB")
     print(f"LLM provider    : {LLM_PROVIDER}")
     print(f"Top-K retrieval : {DEFAULT_TOP_K}")
+    print(f"Max query length: {MAX_QUERY_LENGTH} characters")
 
     print("\nInitializing RAG pipeline...")
+
+    logger.info("Loading embedding model and vector store...")
 
     try:
         pipeline = create_pipeline()
     except Exception as exc:
-        print(f"\nFailed to initialize RAG pipeline: {exc}")
+        logger.error("Failed to initialize RAG pipeline: %s", exc)
+        print(
+            f"\nA fatal error occurred during initialization: {exc}"
+        )
         sys.exit(1)
 
     print("\nPipeline ready.")
@@ -116,14 +163,26 @@ def run_app() -> None:
         try:
             query = input("\nAsk a question: ").strip()
 
-            if query.lower() in {"exit", "quit"}:
-                print("\nGoodbye!")
-                break
+        except (KeyboardInterrupt, EOFError):
+            print("\n\nGoodbye!")
+            break
 
-            if not query:
-                print("Please enter a question.")
-                continue
+        if query.lower() in {"exit", "quit"}:
+            print("\nGoodbye!")
+            break
 
+        if not query:
+            print("Please enter a question.")
+            continue
+
+        if len(query) > MAX_QUERY_LENGTH:
+            print(
+                f"Question exceeds the maximum length of "
+                f"{MAX_QUERY_LENGTH} characters. Please shorten it."
+            )
+            continue
+
+        try:
             result = pipeline.answer(
                 query,
                 top_k=DEFAULT_TOP_K,
@@ -131,14 +190,17 @@ def run_app() -> None:
 
             print_response(result)
 
-        except KeyboardInterrupt:
-            print("\n\nGoodbye!")
-            break
-
         except Exception as exc:
+            logger.error("Unexpected error: %s", exc)
             print(
-                f"\nAn unexpected error occurred: {exc}"
+                "\nAn error occurred while processing your "
+                "request. Please try again."
             )
+
+
+def main() -> None:
+    """Entry point for the ``rag`` console script."""
+    run_app()
 
 
 if __name__ == "__main__":

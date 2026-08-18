@@ -1,4 +1,19 @@
-from typing import Any, Dict, List
+import logging
+import re
+from typing import Any, Dict, List, Optional
+
+logger = logging.getLogger(__name__)
+
+_CITATION_RE = re.compile(r"\[(\d+)\]")
+
+_REFUSAL_PHRASES = [
+    "i could not find this information in the provided documents",
+    "i could not answer the question because no relevant document context was retrieved",
+    "i don't have enough information in the retrieved documents to answer that confidently",
+    "i could not answer the question because",
+    "i cannot find this information",
+    "i don't know",
+]
 
 
 class RAGEvaluator:
@@ -13,13 +28,16 @@ class RAGEvaluator:
         Evaluate whether expected source documents were retrieved.
         """
 
-        retrieved_sources = []
+        retrieved_sources: List[str] = []
 
         for document in retrieved_documents:
             metadata = document.get("metadata", {})
             source = metadata.get("source")
+            source_name = metadata.get("source_name")
 
-            if source:
+            if source_name:
+                retrieved_sources.append(str(source_name))
+            elif source:
                 retrieved_sources.append(str(source))
 
         expected = set(expected_sources)
@@ -67,4 +85,101 @@ class RAGEvaluator:
         return {
             "grounded": True,
             "reason": "Answer was generated using retrieved context.",
+        }
+
+    @staticmethod
+    def evaluate_citations(
+        answer: str,
+        source_documents: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """
+        Check that citation numbers in the answer correspond to
+        retrieved evidence and detect fabricated citations.
+        """
+
+        cited_numbers = sorted(
+            set(int(n) for n in _CITATION_RE.findall(answer))
+        )
+
+        available_ranks: set[int] = set()
+        for idx, doc in enumerate(source_documents, start=1):
+            rank = doc.get("rank", idx)
+            if rank is not None:
+                available_ranks.add(rank)
+
+        fabricated = [
+            num for num in cited_numbers
+            if num not in available_ranks
+        ]
+
+        return {
+            "cited_numbers": cited_numbers,
+            "available_ranks": sorted(available_ranks),
+            "fabricated_citations": fabricated,
+            "has_fabricated_citations": len(fabricated) > 0,
+            "valid": len(fabricated) == 0,
+        }
+
+    @staticmethod
+    def is_refusal(answer: str) -> bool:
+        """Return True if the answer is a refusal to answer."""
+        if not answer or not answer.strip():
+            return False
+        answer_lower = answer.lower().strip()
+        return any(phrase in answer_lower for phrase in _REFUSAL_PHRASES)
+
+    @staticmethod
+    def evaluate_citation_enforcement(
+        answer: str,
+        source_documents: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Validate that an answer has proper, non-fabricated citations.
+
+        Returns a dict with:
+            - valid: bool
+            - reason: str explaining the outcome
+            - cited_numbers: list of cited citation numbers
+            - fabricated_citations: list of fabricated numbers
+        """
+        if not answer or not answer.strip():
+            return {
+                "valid": False,
+                "reason": "empty answer",
+                "cited_numbers": [],
+                "fabricated_citations": [],
+            }
+
+        if RAGEvaluator.is_refusal(answer):
+            return {
+                "valid": True,
+                "reason": "refusal (acceptable without citations)",
+                "cited_numbers": [],
+                "fabricated_citations": [],
+            }
+
+        cite_eval = RAGEvaluator.evaluate_citations(
+            answer, source_documents
+        )
+
+        if cite_eval["has_fabricated_citations"]:
+            return {
+                "valid": False,
+                "reason": "fabricated citations",
+                "cited_numbers": cite_eval["cited_numbers"],
+                "fabricated_citations": cite_eval["fabricated_citations"],
+            }
+
+        if not cite_eval["cited_numbers"]:
+            return {
+                "valid": False,
+                "reason": "missing citations",
+                "cited_numbers": [],
+                "fabricated_citations": [],
+            }
+
+        return {
+            "valid": True,
+            "reason": "valid citations",
+            "cited_numbers": cite_eval["cited_numbers"],
+            "fabricated_citations": [],
         }

@@ -7,14 +7,35 @@ name = "rag-document-intelligence"
 version = "0.1.0"
 description = "A modular Retrieval-Augmented Generation document intelligence pipeline"
 readme = "README.md"
-dependencies = [
-    "python-dotenv",
-    "requests",
-]
 requires-python = ">=3.10"
+dependencies = [
+    "python-dotenv>=1.0",
+    "requests>=2.31",
+    "python-docx>=1.1",
+    "numpy>=1.26",
+    "chromadb>=1.0",
+    "sentence-transformers>=2.2",
+    "pypdf>=5.0",
+    "pymupdf>=1.23",
+    "langchain>=0.3",
+    "langchain-community>=0.3",
+    "langchain-text-splitters>=0.3",
+    "langchain-chroma>=0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "jupyter>=1.0",
+    "ipykernel>=6.0",
+]
+
+[project.scripts]
+rag = "rag_document_intelligence.cli:run_app"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
