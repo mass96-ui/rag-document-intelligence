@@ -14,6 +14,12 @@ __pycache__/
 data/documents/
 data/vector_store/
 data/vector_store*/
+# Knowledge directory: only track READMEs and structure, not real documents
+!knowledge/
+knowledge/*
+!knowledge/*/
+!knowledge/**/README.md
+!knowledge/.gitkeep
 
 # Environment and secrets
 .env

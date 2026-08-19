@@ -21,6 +21,7 @@ dependencies = [
     "langchain-community>=0.3",
     "langchain-text-splitters>=0.3",
     "langchain-chroma>=0.1",
+    "mcp>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,7 @@ dev = [
 
 [project.scripts]
 rag = "rag_document_intelligence.cli:run_app"
+rag-mcp = "rag_document_intelligence.mcp.server:run"
 
 [tool.setuptools.packages.find]
 where = ["src"]

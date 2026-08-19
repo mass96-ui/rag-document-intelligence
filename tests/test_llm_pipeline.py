@@ -25,15 +25,23 @@ def test_context_builder_formats_correctly():
 
     context = builder.build_context(docs)
 
-    assert "[1] Source: doc1.pdf, Page: 10" in context
+    assert "[1]" in context
+    assert "doc1.pdf" in context
+    assert "Page: 10" in context
     assert "First content" in context
-    assert "[2] Source: doc2.txt, Page: unknown" in context
+    assert "[2]" in context
+    assert "doc2.txt" in context
+    assert "Page: unknown" in context
     assert "Second content" in context
+    assert ContextBuilder.PROMPT_INJECTION_WARNING in context
+    assert ContextBuilder.KNOWLEDGE_HEADER in context
 
 
 def test_context_builder_handles_empty_input():
     builder = ContextBuilder()
-    assert builder.build_context([]) == ""
+    context = builder.build_context([])
+    assert ContextBuilder.PROMPT_INJECTION_WARNING in context
+    assert ContextBuilder.KNOWLEDGE_HEADER not in context
 
 
 def test_mock_llm_provider_generates_response():
@@ -56,12 +64,15 @@ def test_rag_pipeline_orchestrates_flow():
     ]
 
     builder = ContextBuilder()
-    provider = MockLLMProvider()
+
+    class _TestableMockLLM(MockLLMProvider):
+        def generate(self, query, context):
+            return "[MOCK RESPONSE]\nQuestion: what is this?\nBased on [1], this is a simulated answer."
 
     pipeline = RAGPipeline(
         retriever=mock_retriever,
         context_builder=builder,
-        llm_provider=provider,
+        llm_provider=_TestableMockLLM(),
     )
 
     query = "Search query"
@@ -69,6 +80,7 @@ def test_rag_pipeline_orchestrates_flow():
 
     assert result["query"] == query
     assert "[MOCK RESPONSE]" in result["answer"]
+    assert "[1]" in result["answer"]
     assert len(result["source_documents"]) == 1
     assert result["source_documents"][0]["content"] == "Retrieved content"
 
@@ -88,8 +100,10 @@ def test_context_builder_includes_score_and_doc_id():
         },
     ]
     context = builder.build_context(docs)
-    assert "[1] Source: doc1.pdf, Page: 3" in context
-    assert "Score" in context
+    assert "[1]" in context
+    assert "doc1.pdf" in context
+    assert "Page: 3" in context
+    assert "Score: 0.950" in context
     assert "doc1.pdf|0|abc123" in context
     assert "Important finding" in context
 
@@ -115,7 +129,9 @@ def test_context_builder_handles_missing_metadata():
         {"rank": 1, "content": "Some content", "metadata": {}},
     ]
     context = builder.build_context(docs)
-    assert "[1] Source: unknown, Page: unknown" in context
+    assert "[1]" in context
+    assert "Source: unknown" in context
+    assert "Page: unknown" in context
     assert "Some content" in context
 
 
@@ -123,7 +139,9 @@ def test_context_builder_handles_missing_metadata_key():
     builder = ContextBuilder()
     docs = [{"rank": 1, "content": "Some content"}]
     context = builder.build_context(docs)
-    assert "[1] Source: unknown, Page: unknown" in context
+    assert "[1]" in context
+    assert "Source: unknown" in context
+    assert "Page: unknown" in context
 
 
 def test_context_builder_skips_empty_content():

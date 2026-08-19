@@ -1,0 +1,23 @@
+{
+    "patient_id": "P002",
+    "demographics": {
+        "height_cm": 162.0,
+        "weight_kg": 68.0,
+        "age": 38,
+        "sex": "female",
+        "bmi": 26.0
+    },
+    "medical_conditions": ["gestational diabetes history"],
+    "diabetes_status": "in_remission",
+    "hemoglobin": 12.8,
+    "hemoglobin_a1c": 5.4,
+    "relevant_medical_history": "Gestational diabetes during pregnancy in 2022. Currently in remission. No current medications.",
+    "current_medications": [],
+    "contraindications": [],
+    "rehabilitation_stage": "active",
+    "exercise_history": "Regular walker, 3-4 times per week. Recently started strength training.",
+    "doctor_notes": "Patient has good glucose control. Continue current activity level.",
+    "session_history": [
+        {"date": "2026-08-12", "activity": "assessment", "notes": "Good baseline fitness"}
+    ]
+}

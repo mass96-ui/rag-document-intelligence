@@ -1,0 +1,20 @@
+{
+    "patient_id": "P003",
+    "demographics": {
+        "height_cm": 180.0,
+        "weight_kg": 95.0,
+        "age": 52,
+        "sex": "male",
+        "bmi": 29.4
+    },
+    "medical_conditions": ["obesity", "pre-diabetes"],
+    "diabetes_status": "prediabetes",
+    "hemoglobin": 14.5,
+    "hemoglobin_a1c": 6.2,
+    "relevant_medical_history": "Pre-diabetes diagnosis. BMI 29.4. Mild knee discomfort on exertion.",
+    "current_medications": ["metformin 500mg daily"],
+    "contraindications": ["knee discomfort — avoid deep squats"],
+    "rehabilitation_stage": "initial",
+    "exercise_history": "Sedentary lifestyle. Never exercised regularly.",
+    "session_history": []
+}

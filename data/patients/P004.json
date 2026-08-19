@@ -1,0 +1,18 @@
+{
+    "patient_id": "P004",
+    "demographics": {
+        "height_cm": 170.0,
+        "weight_kg": 72.0,
+        "age": 29,
+        "sex": "female"
+    },
+    "medical_conditions": [],
+    "relevant_medical_history": "No significant medical history. Athletic background. No known conditions.",
+    "current_medications": [],
+    "contraindications": [],
+    "rehabilitation_stage": "active",
+    "exercise_history": "Collegiate runner. Regular strength training.",
+    "session_history": [
+        {"date": "2026-08-10", "activity": "assessment", "notes": "Excellent baseline fitness"}
+    ]
+}

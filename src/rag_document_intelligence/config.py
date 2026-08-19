@@ -18,6 +18,20 @@ load_dotenv(PROJECT_ROOT / ".env", override=True)
 DATA_DIR = PROJECT_ROOT / "data"
 DOCUMENTS_DIR = DATA_DIR / "documents"
 VECTOR_STORE_DIR = DATA_DIR / "vector_store"
+PATIENT_DATA_DIR = Path(
+    os.getenv(
+        "PATIENT_DATA_DIR",
+        str(DATA_DIR / "patients"),
+    )
+)
+
+# Knowledge directory
+KNOWLEDGE_DIR = Path(
+    os.getenv(
+        "KNOWLEDGE_DIR",
+        str(PROJECT_ROOT / "knowledge"),
+    )
+)
 
 
 def _get_int_env(key: str, default: int) -> int:
@@ -92,6 +106,13 @@ OLLAMA_MODEL = os.getenv(
 )
 
 OLLAMA_TIMEOUT = _get_int_env("OLLAMA_TIMEOUT", 120)
+
+
+# Patient context configuration
+PATIENT_CONTEXT_PROVIDER = os.getenv(
+    "PATIENT_CONTEXT_PROVIDER",
+    "local",
+).lower().strip()
 
 
 def validate_config() -> None:

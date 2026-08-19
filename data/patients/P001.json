@@ -1,0 +1,23 @@
+{
+    "patient_id": "P001",
+    "demographics": {
+        "height_cm": 175.5,
+        "weight_kg": 82.0,
+        "age": 45,
+        "sex": "male",
+        "bmi": 26.7
+    },
+    "medical_conditions": ["hypertension", "type 2 diabetes"],
+    "diabetes_status": "type_2",
+    "hemoglobin": 13.2,
+    "hemoglobin_a1c": 7.1,
+    "relevant_medical_history": "Hypertension diagnosed 5 years ago. Type 2 diabetes diagnosed 3 years ago. No known allergies.",
+    "current_medications": ["metformin 1000mg twice daily", "lisinopril 10mg daily"],
+    "contraindications": ["avoid heavy resistance training"],
+    "rehabilitation_stage": "early_recovery",
+    "exercise_history": "Previously sedentary. Cleared for light activity.",
+    "session_history": [
+        {"date": "2026-08-10", "activity": "assessment", "notes": "Baseline measurements taken"},
+        {"date": "2026-08-15", "activity": "session_1", "notes": "Light resistance, 8 reps"}
+    ]
+}

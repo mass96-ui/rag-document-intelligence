@@ -118,6 +118,15 @@ Key guarantees:
 | `cli.py`           | Interactive command-line interface                   |
 | `ingest.py`        | Ingestion entry points                               |
 | `evaluation.py`    | Retrieval recall, groundedness, citation validation   |
+| `mcp/`             | MCP server and tools (search_knowledge, ask_rag, patient context, evidence validation) |
+
+### Submodule Map
+
+| Submodule              | Responsibility                                      |
+|------------------------|-----------------------------------------------------|
+| `mcp/__init__.py`      | MCP package                                         |
+| `mcp/tools.py`         | MCP tool handlers (thin wrappers over RAG)          |
+| `mcp/server.py`        | MCP stdio server entry point                        |
 
 ---
 
@@ -486,3 +495,220 @@ JSON parse.
 No API keys or secrets are stored. All LLM inference runs locally via
 Ollama. The embedding model is downloaded directly from Hugging Face
 (no token required for `all-MiniLM-L6-v2`).
+
+---
+
+## SoleusAI Integration
+
+The RAG Document Intelligence pipeline is designed to integrate cleanly
+into the SoleusAI AI-agent architecture.
+
+### Architecture
+
+```
+SoleusAI Backend
+       ↓  (patient context via PatientContextProvider)
+RAG Pipeline
+       ↓
+Retrieval (ChromaDB)
+       ↓
+Ollama (structured JSON generation)
+       ↓
+Citation + Safety Validation
+       ↓
+SoleusAI Agent (via MCP tools)
+```
+
+### RAG Input
+
+The RAG pipeline accepts:
+
+| Input          | Type            | Description                              |
+|----------------|-----------------|------------------------------------------|
+| `query`        | `str`          | The user's question                      |
+| `patient_id`   | `str` (optional) | Patient identifier for context-aware QA |
+| `ml_result`    | `MLSessionResult` (optional) | ML subsystem output for context |
+| `top_k`        | `int` (optional) | Number of documents to retrieve (default 5) |
+| `score_threshold` | `float` (optional) | Distance threshold for retrieval     |
+
+Patient context is retrieved via the `PatientContextProvider` abstraction:
+- `LocalPatientContextProvider` — loads JSON fixtures from `data/patients/`
+- `NullPatientContextProvider` — no patient context (pure knowledge mode)
+- `BackendPatientContextProvider` — adapter interface for future SoleusAI backend
+
+### RAG Output
+
+`RAGPipeline.answer()` returns a structured dict:
+
+```python
+{
+    "query": str,                          # Echoed query
+    "answer": str,                         # Grounded answer with [N] citations
+    "citations": [int, ...],              # Deduplicated, sorted citation numbers
+    "confidence": "high" | "moderate" | "low" | "unknown",
+    "refused": bool,                      # True if safe refusal was returned
+    "reason": str | None,                 # "safe_refusal", "error", etc.
+    "sources": [                          # Retrieved source metadata
+        {
+            "rank": int,
+            "source_name": str,
+            "page": str,
+            "score": float,
+            "distance": float,
+            "source_type": str,
+            "trust_level": str,
+        }
+    ],
+    "patient_context_used": bool,         # Whether patient context was loaded
+    "ml_context_used": bool,              # Whether ML context was provided
+    "source_documents": [...],            # Full retrieved document dicts
+    "context_length": int,                # Context string length in chars
+}
+```
+
+### Medical Safety Boundaries
+
+The RAG pipeline enforces medical safety boundaries:
+
+- **Clinical queries** (prescription, dosage, treatment plan, resistance) are
+  detected via regex patterns.
+- **Doctor-approved evidence** (`source_type` in `clinical_guideline`,
+  `clinical_guideline`, or `rehabilitation_protocol`, or `trust_level` of
+  `high`/`verified`/`approved`) is required for clinical recommendations.
+- Without doctor-approved evidence, the pipeline returns a safe refusal:
+  *"I cannot provide a medical recommendation. Please consult with a
+  qualified healthcare provider."*
+
+### MCP (Model Context Protocol)
+
+The RAG exposes its capabilities via MCP, making it available to the
+future SoleusAI AI agent through a standardized tool interface.
+
+**MCP does not replace RAG, ML, CV, or the recommendation engine. It exposes
+their capabilities to an agent in a standardized way.**
+
+#### Running the MCP Server
+
+```powershell
+# Via the console entry point (after pip install -e ".[dev]"):
+rag-mcp
+
+# Or as a module:
+python -m rag_document_intelligence.mcp.server
+```
+
+The server communicates over stdio, the standard MCP transport for
+Claude Desktop and compatible agents.
+
+#### MCP Tools
+
+| Tool                     | Input                         | Output                              |
+|--------------------------|-------------------------------|-------------------------------------|
+| `search_knowledge`       | `query`, `top_k`              | Retrieval results (no answer)       |
+| `ask_rag`                | `query`, `patient_id` (opt), `top_k` (opt) | Full `RAGPipeline.answer()` result |
+| `get_patient_context`    | `patient_id`                  | Sanitized patient context           |
+| `get_ml_context_interface` | (none)                      | ML session interface contract       |
+| `validate_medical_evidence` | `query`, `top_k` (opt)     | Clinical evidence trust assessment  |
+
+#### Example Tool Calls
+
+**search_knowledge:**
+```json
+{"query": "machine learning", "top_k": 5}
+```
+Returns:
+```json
+{
+    "query": "machine learning",
+    "result_count": 2,
+    "sources": [
+        {
+            "rank": 1,
+            "source": "ml.txt",
+            "page": 1,
+            "score": 0.9,
+            "source_type": "general_reference",
+            "snippet": "Machine learning enables computers to learn..."
+        }
+    ]
+}
+```
+
+**ask_rag:**
+```json
+{"query": "What is machine learning?", "patient_id": "P001"}
+```
+Returns the full `RAGPipeline.answer()` dict including `answer`, `citations`,
+`refused`, `confidence`, and `sources`.
+
+**get_patient_context:**
+```json
+{"patient_id": "P001"}
+```
+Returns a sanitized patient context (no filesystem paths, no secrets).
+
+#### MCP Security
+
+- All queries are length-validated (`MAX_QUERY_LENGTH`).
+- All `top_k` values are validated (positive integer, max 50).
+- Patient IDs are sanitized (no path traversal characters).
+- Patient context output is sanitized (no filesystem paths, no secrets).
+- Medical safety boundaries are enforced by the pipeline.
+- Citation enforcement is enforced by the pipeline.
+
+#### Connecting to SoleusAI
+
+The MCP server can be registered with any MCP-compatible client (Claude
+Desktop, custom agents, etc.). To connect to SoleusAI's agent:
+
+1. Ensure the RAG package is installed: `pip install -e ".[dev]"`
+2. Ensure Ollama is running: `ollama serve && ollama pull llama3.2`
+3. Configure `.env` with appropriate settings.
+4. Start the MCP server: `rag-mcp`
+5. Configure the SoleusAI agent to connect to the MCP server via stdio.
+
+#### Independent Usage
+
+The RAG remains fully usable independently of MCP:
+
+```python
+# Python API
+from rag_document_intelligence.cli import create_pipeline
+pipeline = create_pipeline()
+result = pipeline.answer("What is machine learning?", top_k=5)
+
+# CLI
+rag
+
+# Programmatic ingestion
+from rag_document_intelligence.ingest import run_ingestion
+run_ingestion()
+```
+
+---
+
+## Real Clinical Knowledge
+
+**Placeholder content in this repository is NOT authoritative.**
+
+Real clinical knowledge documents must be supplied by doctors and approved
+clinicians. The `knowledge/` directory structure is provided for organizing
+future clinical materials:
+
+```text
+knowledge/
+├── soleus/
+├── rehabilitation/
+├── exercise_science/
+├── biomechanics/
+├── emg/
+├── diabetes/
+├── safety/
+└── device/
+```
+
+Each subdirectory contains a README explaining what belongs there. Real
+clinical documents should be placed in the appropriate subdirectory and
+ingested via `run_ingestion()`.
+
+Only doctor-approved material should inform clinical recommendations.
