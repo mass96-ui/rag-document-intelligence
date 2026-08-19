@@ -189,3 +189,313 @@ def test_get_llm_provider_ollama():
 def test_get_llm_provider_invalid():
     with pytest.raises(ValueError, match="Unsupported"):
         get_llm_provider("openai")
+
+
+# ---------------------------------------------------------------------------
+# Structured generation tests
+# ---------------------------------------------------------------------------
+
+
+def _structured_response(json_str, status_code=200):
+    """Helper: mock Ollama API returning a structured JSON response field."""
+    return _mock_response(
+        status_code=status_code,
+        json_data={"response": json_str, "done": True},
+    )
+
+
+def _structured_call_kwargs(mock_post):
+    """Extract the JSON payload from a mocked requests.post call."""
+    call = mock_post.call_args
+    if call.kwargs:
+        return call.kwargs.get("json", {})
+    return call[1] if len(call) > 1 else {}
+
+
+def test_ollama_structured_valid_json():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"answer": "The answer is 42.", "citations": [1, 2]}'
+        )
+        provider = OllamaLLMProvider()
+        result = provider.generate_structured("What is the answer?", "Context: 42")
+
+        assert result["answer"] == "The answer is 42."
+        assert result["citations"] == [1, 2]
+
+        payload = _structured_call_kwargs(mock_post)
+        assert payload.get("format") == "json"
+
+
+def test_ollama_structured_multiple_citations():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"answer": "Multi-source.", "citations": [3, 1, 2]}'
+        )
+        provider = OllamaLLMProvider()
+        result = provider.generate_structured("q", "c")
+        assert result["citations"] == [1, 2, 3]
+
+
+def test_ollama_structured_duplicate_citations():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"answer": "Answer.", "citations": [1, 1, 2]}'
+        )
+        provider = OllamaLLMProvider()
+        result = provider.generate_structured("q", "c")
+        assert result["citations"] == [1, 2]
+
+
+def test_ollama_structured_malformed_json():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response("not json at all")
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="parsed as JSON"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_missing_answer():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"citations": [1]}'
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="answer"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_empty_answer():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"answer": "", "citations": [1]}'
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="answer"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_whitespace_answer():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"answer": "   ", "citations": [1]}'
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="answer"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_missing_citations():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"answer": "some answer"}'
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="citations"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_citations_not_list():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"answer": "some answer", "citations": "not a list"}'
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="citations"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_string_citation_rejected():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"answer": "some answer", "citations": ["1"]}'
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="not an integer"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_bool_citation_rejected():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"answer": "some answer", "citations": [true]}'
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="boolean|integer"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_negative_citation():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"answer": "some answer", "citations": [-1]}'
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="positive|not positive"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_zero_citation():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '{"answer": "some answer", "citations": [0]}'
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="positive|not positive"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_http_500():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        resp = _mock_response(
+            status_code=500, json_data={"error": "server"}
+        )
+        resp.raise_for_status.side_effect = requests.HTTPError(
+            "500 error"
+        )
+        mock_post.return_value = resp
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="HTTP 500"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_http_404():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        resp = _mock_response(status_code=404, json_data={})
+        resp.raise_for_status.side_effect = requests.HTTPError("404")
+        mock_post.return_value = resp
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="endpoint not found"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_http_400():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        resp = _mock_response(status_code=400, json_data={})
+        resp.raise_for_status.side_effect = requests.HTTPError("400")
+        mock_post.return_value = resp
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="rejected"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_timeout():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.side_effect = requests.Timeout("Timed out")
+        provider = OllamaLLMProvider(timeout=1)
+        with pytest.raises(RuntimeError, match="timed out"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_connection_refused():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.side_effect = requests.ConnectionError(
+            "Connection refused"
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="connect to Ollama"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_empty_context():
+    provider = OllamaLLMProvider()
+    result = provider.generate_structured("test", "")
+    assert "could not answer" in result["answer"].lower()
+    assert result["citations"] == []
+
+
+def test_ollama_structured_non_string_response():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _mock_response(
+            json_data={"response": 12345}
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="non-string"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_empty_response():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _mock_response(
+            json_data={"response": "  "}
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="empty"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_missing_response_field():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _mock_response(
+            json_data={"done": True}
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="response"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_non_dict_json():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '"just a string"'
+        )
+        provider = OllamaLLMProvider()
+        with pytest.raises(RuntimeError, match="not a JSON object"):
+            provider.generate_structured("test", "context")
+
+
+def test_ollama_structured_json_with_markdown_fences():
+    with patch(
+        "rag_document_intelligence.llm.requests.post"
+    ) as mock_post:
+        mock_post.return_value = _structured_response(
+            '```json\n{"answer": "Hello", "citations": [1]}\n```'
+        )
+        provider = OllamaLLMProvider()
+        result = provider.generate_structured("test", "context")
+        assert result["answer"] == "Hello"
+        assert result["citations"] == [1]

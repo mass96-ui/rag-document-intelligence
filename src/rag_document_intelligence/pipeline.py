@@ -34,13 +34,31 @@ class RAGPipeline:
         self.context_builder = context_builder
         self.llm_provider = llm_provider
 
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _get_available_ranks(
+        retrieved_docs: List[Dict[str, Any]],
+    ) -> List[int]:
+        """Return sorted list of citation ranks available from retrieval."""
+        ranks: set[int] = set()
+        for idx, doc in enumerate(retrieved_docs, start=1):
+            rank = doc.get("rank", idx)
+            if rank is not None:
+                ranks.add(int(rank))
+        return sorted(ranks)
+
     def _build_regeneration_context(
         self,
         context: str,
         available_ranks: List[int],
     ) -> str:
         """Append citation-enforcement instructions to the context."""
-        ranks_str = ", ".join(f"[{r}]" for r in sorted(available_ranks))
+        ranks_str = ", ".join(
+            f"[{r}]" for r in sorted(available_ranks)
+        )
         return (
             f"{context}\n\n"
             f"---\n"
@@ -57,16 +75,70 @@ class RAGPipeline:
             f'"{_SAFE_REFUSAL}"'
         )
 
-    def _generate_safely(
+    def _validate_structured(
         self,
-        query: str,
-        context: str,
-    ) -> str:
-        """Call the LLM provider and catch errors."""
-        return self.llm_provider.generate(
-            query=query,
-            context=context,
+        structured: Dict[str, Any],
+        retrieved_docs: List[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Validate a structured response; return normalized text or None."""
+        if not isinstance(structured, dict):
+            logger.warning(
+                "Structured response is not a dict: %s",
+                type(structured).__name__,
+            )
+            return None
+
+        answer_field = structured.get("answer")
+        citations_field = structured.get("citations")
+
+        # --- structural validation ---
+        validation = RAGEvaluator.validate_structured_response(
+            answer_field, citations_field, retrieved_docs,
         )
+
+        if validation["valid"]:
+            normalized = RAGEvaluator.normalize_citations(
+                answer_field, validation["citations"],
+            )
+            return normalized
+
+        # --- text fallback: check answer field for [N] markers ---
+        if isinstance(answer_field, str) and answer_field.strip():
+            text_validation = (
+                RAGEvaluator.evaluate_citation_enforcement(
+                    answer_field, retrieved_docs,
+                )
+            )
+            if text_validation["valid"]:
+                return answer_field
+
+        logger.warning(
+            "Structured validation failed (%s) and text fallback "
+            "also failed.",
+            validation["reason"],
+        )
+        return None
+
+    def _validate_text(
+        self,
+        answer_text: str,
+        retrieved_docs: List[Dict[str, Any]],
+    ) -> Optional[str]:
+        """Validate a text response; return it if valid, else None."""
+        validation = RAGEvaluator.evaluate_citation_enforcement(
+            answer_text, retrieved_docs,
+        )
+        if validation["valid"]:
+            return answer_text
+        logger.warning(
+            "Text citation validation failed (%s).",
+            validation["reason"],
+        )
+        return None
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
 
     def answer(
         self,
@@ -81,7 +153,8 @@ class RAGPipeline:
             User query
                 -> document retrieval
                 -> context construction
-                -> LLM generation
+                -> structured LLM generation (preferred)
+                -> text generation fallback
                 -> citation validation
                 -> valid answer OR one regeneration
                 -> safe refusal if still invalid
@@ -167,85 +240,94 @@ class RAGPipeline:
                 "context_length": 0,
             }
 
-        # 5. Generate answer
+        available_ranks = self._get_available_ranks(retrieved_docs)
+        last_error: Optional[Exception] = None
+        answer_text: Optional[str] = None
+
+        # 5. Attempt structured generation (preferred path)
         try:
-            answer_text = self._generate_safely(
+            structured = self.llm_provider.generate_structured(
                 query=cleaned_query,
                 context=context,
             )
+            answer_text = self._validate_structured(
+                structured, retrieved_docs,
+            )
         except Exception as exc:
-            logger.error("Generation failed: %s", exc)
-            return {
-                "query": cleaned_query,
-                "answer": f"Error during answer generation: {exc}",
-                "source_documents": retrieved_docs,
-                "context_length": len(context),
-            }
-
-        # 6. Validate citations
-        validation = RAGEvaluator.evaluate_citation_enforcement(
-            answer_text, retrieved_docs
-        )
-
-        if not validation["valid"]:
             logger.warning(
-                "Citation validation failed (%s). Attempting "
-                "regeneration.", validation["reason"],
+                "Structured generation failed: %s", exc,
             )
 
-            available_ranks = sorted(
-                set(
-                    doc.get("rank", idx)
-                    for idx, doc in enumerate(
-                        retrieved_docs, start=1
-                    )
-                )
-            )
-
-            # 7. Regenerate with stricter instructions (at most once)
+        # 8. Fallback to text generation if structured unavailable/invalid
+        if not answer_text:
             try:
-                regen_context = self._build_regeneration_context(
-                    context, available_ranks
+                text_answer = self.llm_provider.generate(
+                    query=cleaned_query,
+                    context=context,
                 )
-                regenerated_text = self._generate_safely(
+            except Exception as exc:
+                logger.error("Generation failed: %s", exc)
+                last_error = exc
+            else:
+                answer_text = self._validate_text(
+                    text_answer, retrieved_docs,
+                )
+
+        # 10. Regenerate at most once
+        if not answer_text:
+            logger.warning(
+                "Initial generation invalid. Attempting one "
+                "regeneration.",
+            )
+            regen_context = self._build_regeneration_context(
+                context, available_ranks,
+            )
+
+            # Try structured regeneration
+            try:
+                structured = self.llm_provider.generate_structured(
                     query=cleaned_query,
                     context=regen_context,
                 )
+                answer_text = self._validate_structured(
+                    structured, retrieved_docs,
+                )
             except Exception as exc:
-                logger.error("Regeneration failed: %s", exc)
-                return {
-                    "query": cleaned_query,
-                    "answer": _SAFE_REFUSAL,
-                    "source_documents": retrieved_docs,
-                    "context_length": len(context),
-                }
-
-            # 8. Validate regenerated answer
-            regen_validation = (
-                RAGEvaluator.evaluate_citation_enforcement(
-                    regenerated_text, retrieved_docs
-                )
-            )
-
-            if regen_validation["valid"]:
-                logger.info(
-                    "Regenerated answer passed citation validation."
-                )
-                answer_text = regenerated_text
-            else:
                 logger.warning(
-                    "Regenerated answer still invalid (%s). "
-                    "Returning safe refusal.",
-                    regen_validation["reason"],
+                    "Structured regeneration failed: %s", exc,
                 )
+
+            # Try text regeneration if structured didn't yield valid answer
+            if not answer_text:
+                try:
+                    regen_text = self.llm_provider.generate(
+                        query=cleaned_query,
+                        context=regen_context,
+                    )
+                except Exception as exc:
+                    logger.error("Regeneration generation failed: %s", exc)
+                    last_error = exc
+                else:
+                    answer_text = self._validate_text(
+                        regen_text, retrieved_docs,
+                    )
+
+        # 11. Final safe refusal or error propagation
+        if not answer_text:
+            if last_error is not None:
+                answer_text = (
+                    f"Error during answer generation: {last_error}"
+                )
+            else:
                 answer_text = _SAFE_REFUSAL
 
-        # 9. Return answer + evidence
         logger.info(
-            "RAG answer generated for query (context=%d chars)",
-            len(context),
+            "RAG answer generated for query "
+            "(context=%d chars, sources=%d)",
+            len(context), len(retrieved_docs),
         )
 
+        # 9. Return answer + evidence
         return {
             "query": cleaned_query,
             "answer": answer_text,

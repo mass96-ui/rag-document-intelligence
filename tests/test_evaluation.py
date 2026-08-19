@@ -201,3 +201,171 @@ def test_is_refusal_rejects_normal_answer():
 
 def test_is_refusal_rejects_empty():
     assert not RAGEvaluator.is_refusal("")
+
+
+# ---------------------------------------------------------------------------
+# Structured response validation tests
+# ---------------------------------------------------------------------------
+
+_STRUCT_DOCS = [
+    {"rank": 1, "content": "alpha", "metadata": {"source": "a.pdf"}},
+    {"rank": 2, "content": "beta", "metadata": {"source": "b.pdf"}},
+    {"rank": 3, "content": "gamma", "metadata": {"source": "c.pdf"}},
+]
+
+
+def test_validate_structured_valid_response():
+    result = RAGEvaluator.validate_structured_response(
+        "The answer is alpha.", [1, 2], _STRUCT_DOCS
+    )
+    assert result["valid"] is True
+    assert result["citations"] == [1, 2]
+    assert result["reason"] == "valid structured response"
+    assert result["fabricated_citations"] == []
+
+
+def test_validate_structured_missing_answer():
+    result = RAGEvaluator.validate_structured_response(
+        None, [1], _STRUCT_DOCS
+    )
+    assert result["valid"] is False
+    assert "answer" in result["reason"]
+
+
+def test_validate_structured_empty_answer():
+    result = RAGEvaluator.validate_structured_response(
+        "", [1], _STRUCT_DOCS
+    )
+    assert result["valid"] is False
+    assert "answer" in result["reason"]
+
+
+def test_validate_structured_whitespace_answer():
+    result = RAGEvaluator.validate_structured_response(
+        "   ", [1], _STRUCT_DOCS
+    )
+    assert result["valid"] is False
+    assert "answer" in result["reason"]
+
+
+def test_validate_structured_missing_citations():
+    result = RAGEvaluator.validate_structured_response(
+        "Some answer", None, _STRUCT_DOCS
+    )
+    assert result["valid"] is False
+    assert "citations" in result["reason"]
+
+
+def test_validate_structured_citations_not_list():
+    result = RAGEvaluator.validate_structured_response(
+        "Some answer", "not a list", _STRUCT_DOCS
+    )
+    assert result["valid"] is False
+    assert "citations" in result["reason"]
+
+
+def test_validate_structured_non_integer_citation():
+    result = RAGEvaluator.validate_structured_response(
+        "Some answer", ["1"], _STRUCT_DOCS
+    )
+    assert result["valid"] is False
+    assert "not an integer" in result["reason"]
+
+
+def test_validate_structured_bool_citation_rejected():
+    result = RAGEvaluator.validate_structured_response(
+        "Some answer", [True], _STRUCT_DOCS
+    )
+    assert result["valid"] is False
+    assert "boolean" in result["reason"]
+
+
+def test_validate_structured_negative_citation():
+    result = RAGEvaluator.validate_structured_response(
+        "Some answer", [-1], _STRUCT_DOCS
+    )
+    assert result["valid"] is False
+    assert "positive" in result["reason"]
+
+
+def test_validate_structured_zero_citation():
+    result = RAGEvaluator.validate_structured_response(
+        "Some answer", [0], _STRUCT_DOCS
+    )
+    assert result["valid"] is False
+    assert "positive" in result["reason"]
+
+
+def test_validate_structured_fabricated_citation():
+    result = RAGEvaluator.validate_structured_response(
+        "Some answer", [99], _STRUCT_DOCS
+    )
+    assert result["valid"] is False
+    assert result["reason"] == "fabricated citations"
+    assert 99 in result["fabricated_citations"]
+
+
+def test_validate_structured_factual_no_citations_invalid():
+    result = RAGEvaluator.validate_structured_response(
+        "The answer is based on data.", [], _STRUCT_DOCS
+    )
+    assert result["valid"] is False
+    assert result["reason"] == "missing citations"
+
+
+def test_validate_structured_refusal_with_empty_citations():
+    refusal = (
+        "I could not find enough information in the "
+        "provided documents to answer this confidently."
+    )
+    result = RAGEvaluator.validate_structured_response(
+        refusal, [], _STRUCT_DOCS
+    )
+    assert result["valid"] is True
+    assert "refusal" in result["reason"]
+    assert result["citations"] == []
+
+
+def test_validate_structured_refusal_with_citations():
+    refusal = (
+        "I could not find this information in the "
+        "provided documents."
+    )
+    result = RAGEvaluator.validate_structured_response(
+        refusal, [1], _STRUCT_DOCS
+    )
+    assert result["valid"] is True
+    assert "refusal" in result["reason"]
+
+
+def test_validate_structured_duplicate_citations_normalized():
+    result = RAGEvaluator.validate_structured_response(
+        "Some answer", [2, 1, 2, 1], _STRUCT_DOCS
+    )
+    assert result["valid"] is True
+    assert result["citations"] == [1, 2]
+
+
+def test_normalize_citations_sorted_and_deduplicated():
+    result = RAGEvaluator.normalize_citations(
+        "Answer text", [3, 1, 2, 1]
+    )
+    assert result == "Answer text [1] [2] [3]"
+
+
+def test_normalize_citations_no_duplicates_existing():
+    result = RAGEvaluator.normalize_citations(
+        "Answer [1] text", [1, 2]
+    )
+    assert result == "Answer [1] text [2]"
+    assert result.count("[1]") == 1
+
+
+def test_normalize_citations_filters_invalid_types():
+    result = RAGEvaluator.normalize_citations(
+        "Answer", [1, -1, 0, 2, "3", True, 1]
+    )
+    assert "[1]" in result
+    assert "[2]" in result
+    assert "-1" not in result
+    assert "[0]" not in result

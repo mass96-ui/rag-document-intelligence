@@ -3,7 +3,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from rag_document_intelligence.context_builder import ContextBuilder
-from rag_document_intelligence.llm import MockLLMProvider
+from rag_document_intelligence.evaluation import RAGEvaluator
+from rag_document_intelligence.llm import LLMProvider, MockLLMProvider
 from rag_document_intelligence.pipeline import RAGPipeline
 
 
@@ -208,7 +209,7 @@ def test_pipeline_returns_error_on_generation_failure():
 # Citation enforcement pipeline tests
 # ---------------------------------------------------------------------------
 
-class _ConfigurableMockLLM:
+class _ConfigurableMockLLM(LLMProvider):
     """Mock LLM that returns pre-set responses in order."""
 
     def __init__(self, responses=None):
@@ -314,7 +315,7 @@ def test_citation_enforcement_failed_regeneration_refuses():
     )
     result = pipeline.answer("test")
     assert "could not find this information" in result["answer"].lower()
-    assert llm.call_count == 2
+    assert llm.call_count == 4
 
 
 def test_citation_enforcement_regeneration_at_most_once():
@@ -331,7 +332,7 @@ def test_citation_enforcement_regeneration_at_most_once():
     )
     result = pipeline.answer("test")
     assert "could not find this information" in result["answer"].lower()
-    assert llm.call_count == 2
+    assert llm.call_count == 4
 
 
 def test_citation_enforcement_unsupported_question_refuses():
@@ -366,3 +367,280 @@ class _MockRetriever:
 
     def retrieve(self, query, top_k=5, score_threshold=None):
         return self._documents
+
+
+# ---------------------------------------------------------------------------
+# Structured generation pipeline tests
+# ---------------------------------------------------------------------------
+
+
+class _StructuredMockLLM(LLMProvider):
+    """Mock LLM that returns pre-set structured responses in order."""
+
+    def __init__(self, responses=None):
+        self.responses = list(responses or [])
+        self.call_count = 0
+        self.calls = []
+
+    def generate(self, query, context):
+        return ""
+
+    def generate_structured(self, query, context):
+        self.call_count += 1
+        self.calls.append({"query": query, "context": context})
+        if self.call_count <= len(self.responses):
+            return self.responses[self.call_count - 1]
+        return (
+            self.responses[-1]
+            if self.responses
+            else {"answer": "", "citations": []}
+        )
+
+
+def test_structured_pipeline_success():
+    docs = _mock_docs(3)
+    llm = _StructuredMockLLM([
+        {"answer": "The answer is based on evidence.", "citations": [1, 2]},
+    ])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "The answer is based on evidence." in result["answer"]
+    assert "[1]" in result["answer"]
+    assert "[2]" in result["answer"]
+    assert "[3]" not in result["answer"]
+    assert llm.call_count == 1
+
+
+def test_structured_pipeline_multiple_citations_sorted():
+    docs = _mock_docs(4)
+    llm = _StructuredMockLLM([
+        {"answer": "Multi-source answer.", "citations": [3, 1, 2]},
+    ])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "Multi-source answer." in result["answer"]
+    assert "[1]" in result["answer"]
+    assert "[2]" in result["answer"]
+    assert "[3]" in result["answer"]
+    assert "[4]" not in result["answer"]
+    idx1 = result["answer"].index("[1]")
+    idx2 = result["answer"].index("[2]")
+    idx3 = result["answer"].index("[3]")
+    assert idx1 < idx2 < idx3
+
+
+def test_structured_pipeline_refusal_with_empty_citations():
+    docs = _mock_docs(3)
+    llm = _StructuredMockLLM([
+        {
+            "answer": (
+                "I could not find enough information in the "
+                "provided documents to answer this confidently."
+            ),
+            "citations": [],
+        },
+    ])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "could not find" in result["answer"].lower()
+    assert llm.call_count == 1
+
+
+def test_structured_pipeline_fabricated_citation_triggers_fallback():
+    docs = _mock_docs(3)
+    llm = MagicMock()
+    llm.generate_structured.return_value = {
+        "answer": "Answer based on [99].", "citations": [99],
+    }
+    llm.generate.return_value = "Answer based on [1]."
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "[1]" in result["answer"]
+    assert "[99]" not in result["answer"]
+
+
+def test_structured_pipeline_missing_citations_triggers_fallback():
+    docs = _mock_docs(3)
+    llm = MagicMock()
+    llm.generate_structured.return_value = {
+        "answer": "Answer without citations.", "citations": [],
+    }
+    llm.generate.return_value = "Answer without citations."
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "could not find" in result["answer"].lower()
+
+
+def test_structured_pipeline_malformed_json_falls_back_to_text():
+    docs = _mock_docs(3)
+    llm = MagicMock()
+    llm.generate_structured.side_effect = RuntimeError(
+        "not valid JSON"
+    )
+    llm.generate.return_value = "The answer is [1] based on context."
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "The answer is [1]" in result["answer"]
+    llm.generate_structured.assert_called_once()
+    llm.generate.assert_called_once()
+
+
+def test_structured_pipeline_no_duplicate_citation_markers():
+    docs = _mock_docs(3)
+    llm = MagicMock()
+    llm.generate_structured.return_value = {
+        "answer": "Answer [1] already cited.", "citations": [1, 2],
+    }
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert result["answer"].count("[1]") == 1
+    assert "[2]" in result["answer"]
+
+
+def test_structured_pipeline_unsupported_refuses_without_llm():
+    llm = MagicMock()
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever([]),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("What is the capital of France?")
+    assert "enough information" in result["answer"].lower()
+    llm.generate_structured.assert_not_called()
+    llm.generate.assert_not_called()
+
+
+def test_structured_pipeline_max_one_regeneration():
+    docs = _mock_docs(3)
+    llm = _StructuredMockLLM([
+        {"answer": "Bad answer.", "citations": [99]},
+        {"answer": "Bad answer.", "citations": [98]},
+        {"answer": "Should not be called.", "citations": [97]},
+    ])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "could not find" in result["answer"].lower()
+    assert llm.call_count == 2
+
+
+def test_structured_pipeline_mock_compatible():
+    docs = _mock_docs(1)
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=MockLLMProvider(),
+    )
+    result = pipeline.answer("test question")
+    assert "[MOCK RESPONSE]" in result["answer"]
+
+
+def test_structured_pipeline_generate_only_provider():
+    """A provider that only implements generate() must still work."""
+
+    class _GenerateOnly:
+        def generate(self, query, context):
+            return "The answer is [1] based on context."
+
+    docs = _mock_docs(3)
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=_GenerateOnly(),
+    )
+    result = pipeline.answer("test")
+    assert "[1]" in result["answer"]
+
+
+def test_structured_pipeline_regeneration_success():
+    docs = _mock_docs(3)
+    llm = _StructuredMockLLM([
+        {"answer": "No citations here.", "citations": []},
+        {"answer": "Good answer.", "citations": [1]},
+    ])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "Good answer." in result["answer"]
+    assert "[1]" in result["answer"]
+    assert llm.call_count == 2
+
+
+def test_structured_pipeline_normalizes_citations():
+    docs = _mock_docs(5)
+    llm = _StructuredMockLLM([
+        {
+            "answer": "Machine learning enables systems to learn.",
+            "citations": [3, 1, 2, 1, 3],
+        },
+    ])
+    pipeline = RAGPipeline(
+        retriever=_MockRetriever(docs),
+        context_builder=ContextBuilder(),
+        llm_provider=llm,
+    )
+    result = pipeline.answer("test")
+    assert "Machine learning enables systems to learn." in result["answer"]
+    citation_part = result["answer"].replace(
+        "Machine learning enables systems to learn.", ""
+    ).strip()
+    assert citation_part == "[1] [2] [3]"
+
+
+def test_normalize_citations_appends_correctly():
+    answer = "Machine learning is a field of CS."
+    citations = [2, 1, 2]
+    result = RAGEvaluator.normalize_citations(answer, citations)
+    assert result == "Machine learning is a field of CS. [1] [2]"
+
+
+def test_normalize_citations_no_duplicates():
+    answer = "Answer [1]"
+    citations = [1, 2]
+    result = RAGEvaluator.normalize_citations(answer, citations)
+    assert result == "Answer [1] [2]"
+    assert result.count("[1]") == 1
+
+
+def test_normalize_citations_filters_invalid():
+    answer = "Test answer"
+    citations = [1, -1, 0, 2, "3", True, 1]
+    result = RAGEvaluator.normalize_citations(answer, citations)
+    assert "[1]" in result
+    assert "[2]" in result
+    assert "-1" not in result
+    assert "[0]" not in result

@@ -237,7 +237,7 @@ cp .env.example .env
 | `OLLAMA_BASE_URL`    | `http://localhost:11434`| Ollama API endpoint                          |
 | `OLLAMA_MODEL`       | `llama3.2`             | Model name to use                            |
 | `OLLAMA_TIMEOUT`     | `120`                  | Request timeout in seconds                   |
-| `EMBEDDING_MODEL`    | `all-MiniLM-L6-v2`     | SentenceTransformers model                   |
+| `EMBEDDING_MODEL_NAME` | `all-MiniLM-L6-v2`   | SentenceTransformers model                   |
 | `COLLECTION_NAME`    | `pdf_documents`        | ChromaDB collection name                     |
 | `CHUNK_SIZE`         | `500`                  | Characters per chunk                         |
 | `CHUNK_OVERLAP`      | `50`                   | Overlap between consecutive chunks           |
@@ -442,6 +442,44 @@ refusal: "I could not find this information in the provided documents."
 
 This ensures the pipeline **never silently returns** an answer with
 fabricated, invalid, or missing citations.
+
+### Structured Ollama generation
+
+When the provider is `ollama`, the pipeline prefers a **structured
+generation** path that leverages Ollama's native `format: "json"`
+support:
+
+1. The model is prompted to return **only valid JSON** with two fields:
+   `answer` (a string) and `citations` (a list of positive integers).
+2. The request is sent to `POST /api/generate` with
+   `"format": "json"` and `"options": {"temperature": 0.1}`.
+3. The raw response is parsed and structurally validated by
+   `OllamaLLMProvider._parse_structured_response()`:
+   - Malformed JSON, missing/empty `answer`, `citations` not a list,
+     non-integer or non-positive citation values all raise
+     `RuntimeError`.
+   - Markdown code fences (```` ```json ... ``` ````) are stripped
+     before parsing as a tolerance fallback.
+4. `RAGEvaluator.validate_structured_response()` performs
+   **application-side** validation — it does **not** trust the model:
+   - Every citation must map to an available retrieval rank.
+   - A factual answer with zero citations is invalid.
+   - A refusal answer with zero citations is valid.
+   - Duplicates are deduplicated and sorted deterministically.
+5. `RAGEvaluator.normalize_citations()` appends `[N]` markers to the
+   final answer text, deduplicating against any existing markers.
+
+If structured generation fails (HTTP error, timeout, malformed output,
+or invalid citations), the pipeline **falls back** to text-based
+generation via `generate()`. The existing text citation enforcement
+and at-most-one-regeneration logic still applies to the fallback path.
+
+`MockLLMProvider.generate_structured()` returns
+`{"answer": <text>, "citations": []}` so tests exercise the text
+fallback path. Providers that only implement `generate()` (not
+`generate_structured()`) work via the non-abstract default on
+`LLMProvider`, which delegates to `generate()` and attempts a lenient
+JSON parse.
 
 ### No credentials
 

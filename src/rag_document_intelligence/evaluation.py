@@ -1,6 +1,6 @@
 import logging
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
@@ -8,8 +8,10 @@ _CITATION_RE = re.compile(r"\[(\d+)\]")
 
 _REFUSAL_PHRASES = [
     "i could not find this information in the provided documents",
+    "i could not find enough information in the provided documents",
     "i could not answer the question because no relevant document context was retrieved",
     "i don't have enough information in the retrieved documents to answer that confidently",
+    "i don't have enough information in the provided documents",
     "i could not answer the question because",
     "i cannot find this information",
     "i don't know",
@@ -183,3 +185,176 @@ class RAGEvaluator:
             "cited_numbers": cite_eval["cited_numbers"],
             "fabricated_citations": [],
         }
+
+    @staticmethod
+    def validate_structured_response(
+        answer: Any,
+        citations: Any,
+        source_documents: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        """Validate a structured LLM response.
+
+        Checks:
+        - answer is a non-empty string
+        - citations is a list
+        - every citation is a positive int (bool rejected)
+        - duplicates removed, ordering sorted & deterministic
+        - every citation exists in available source ranks
+        - refusal answers may have empty citations
+        - non-refusal answers require at least one valid citation
+
+        Does NOT trust the model — the application is the authority
+        on valid citations.
+        """
+
+        available_ranks: Set[int] = set()
+        for idx, doc in enumerate(source_documents, start=1):
+            rank = doc.get("rank", idx)
+            if rank is not None:
+                available_ranks.add(int(rank))
+
+        sorted_ranks = sorted(available_ranks)
+
+        # --- answer ---
+        if not isinstance(answer, str) or not answer.strip():
+            return {
+                "valid": False,
+                "reason": "missing or empty answer",
+                "citations": [],
+                "available_ranks": sorted_ranks,
+                "fabricated_citations": [],
+            }
+
+        # --- citations ---
+        if not isinstance(citations, list):
+            return {
+                "valid": False,
+                "reason": "citations is not a list",
+                "citations": [],
+                "available_ranks": sorted_ranks,
+                "fabricated_citations": [],
+            }
+
+        validated: List[int] = []
+        for idx, c in enumerate(citations):
+            if isinstance(c, bool):
+                return {
+                    "valid": False,
+                    "reason": (
+                        f"citation at index {idx} is a boolean, "
+                        "not an integer"
+                    ),
+                    "citations": [],
+                    "available_ranks": sorted_ranks,
+                    "fabricated_citations": [],
+                }
+            if not isinstance(c, int):
+                return {
+                    "valid": False,
+                    "reason": (
+                        f"citation at index {idx} is not an integer "
+                        f"(got {type(c).__name__})"
+                    ),
+                    "citations": [],
+                    "available_ranks": sorted_ranks,
+                    "fabricated_citations": [],
+                }
+            if c <= 0:
+                return {
+                    "valid": False,
+                    "reason": (
+                        f"citation at index {idx} is not positive "
+                        f"(got {c})"
+                    ),
+                    "citations": [],
+                    "available_ranks": sorted_ranks,
+                    "fabricated_citations": [],
+                }
+            validated.append(c)
+
+        # Deduplicate + sort for deterministic ordering.
+        validated = sorted(set(validated))
+
+        # --- fabricated check ---
+        fabricated = [
+            c for c in validated if c not in available_ranks
+        ]
+        if fabricated:
+            return {
+                "valid": False,
+                "reason": "fabricated citations",
+                "citations": validated,
+                "available_ranks": sorted_ranks,
+                "fabricated_citations": fabricated,
+            }
+
+        # --- refusal accepted without citations ---
+        if RAGEvaluator.is_refusal(answer):
+            return {
+                "valid": True,
+                "reason": "refusal (acceptable without citations)",
+                "citations": validated,
+                "available_ranks": sorted_ranks,
+                "fabricated_citations": [],
+            }
+
+        # --- non-refusal requires at least one citation ---
+        if not validated:
+            return {
+                "valid": False,
+                "reason": "missing citations",
+                "citations": [],
+                "available_ranks": sorted_ranks,
+                "fabricated_citations": [],
+            }
+
+        return {
+            "valid": True,
+            "reason": "valid structured response",
+            "citations": validated,
+            "available_ranks": sorted_ranks,
+            "fabricated_citations": [],
+        }
+
+    @staticmethod
+    def normalize_citations(
+        answer: str,
+        citations: List[int],
+    ) -> str:
+        """Append sorted, deduplicated citation markers to *answer*.
+
+        Rules:
+        - citations are sorted numerically and deduplicated
+        - only positive integers are kept
+        - existing ``[N]`` markers in *answer* are not duplicated
+        - fabricated numbers (not checked here) should be filtered
+          upstream by ``validate_structured_response``
+        """
+        seen: Set[int] = set()
+        existing: Set[int] = set(
+            int(n) for n in _CITATION_RE.findall(answer)
+        )
+
+        clean: List[int] = []
+        for c in citations:
+            if isinstance(c, bool):
+                continue
+            if not isinstance(c, int):
+                continue
+            if c <= 0:
+                continue
+            if c in seen:
+                continue
+            seen.add(c)
+            clean.append(c)
+
+        clean = sorted(clean)
+
+        append: List[str] = []
+        for c in clean:
+            if c not in existing:
+                append.append(f"[{c}]")
+
+        if append:
+            return f"{answer.rstrip()} {' '.join(append)}"
+        return answer.rstrip()
